@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from 'hono/cloudflare-workers';
-// 必须导入 manifest，这是 Wrangler 在构建时生成的资源清单
 import manifest from '__STATIC_CONTENT_MANIFEST';
 
 import Database from './database.js';
@@ -17,15 +16,17 @@ const app = new Hono();
 // =================================================================================
 
 // 1. 通用静态资源 (CSS, JS, Fonts, Images)
-// 将此中间件放在最前面，确保静态文件 (如 manager.css) 不需要登录就能访问
+// 这行让 /manager.css, /manager.js 等文件可以直接访问
 app.use('/*', serveStatic({ root: './', manifest }));
 
-// 2. 特定页面路由重写
-// 当用户访问 /login 时，返回 login.html 的内容
+// 2. 页面路由重写 (关键修改：添加 admin 和 editor 映射)
+// 这样访问 /admin 就等于访问 /admin.html
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
+app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
+app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 
-// 当用户访问 /view/xxx 时，返回 manager.html (前端路由)
+// 前端视图路由
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
 
@@ -33,25 +34,15 @@ app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 // 1. 全局中间件：注入 DB, Config, Storage, Crypto
 // =================================================================================
 app.use('*', async (c, next) => {
-    // 0. 初始化环境变量中的加密密钥
     initCrypto(c.env.SESSION_SECRET);
-
-    // 1. 初始化 DB
     const db = new Database(c.env.DB);
     c.set('db', db);
-
-    // 2. 初始化 Config
     const configManager = new ConfigManager(c.env.CONFIG_KV);
     c.set('configManager', configManager);
-
-    // 3. 预加载配置
     const config = await configManager.load();
     c.set('config', config);
-
-    // 4. 初始化存储后端
     const storage = initStorage(config, c.env); 
     c.set('storage', storage);
-
     await next();
 });
 
@@ -59,7 +50,6 @@ app.use('*', async (c, next) => {
 // 2. 认证中间件
 // =================================================================================
 const authMiddleware = async (c, next) => {
-    // 排除公开路由
     const publicPaths = [
         '/login', 
         '/register', 
@@ -71,7 +61,6 @@ const authMiddleware = async (c, next) => {
         '/favicon.ico'
     ];
     
-    // 如果请求路径以 publicPaths 开头，放行
     if (publicPaths.some(path => c.req.path.startsWith(path))) {
         return await next();
     }
@@ -119,22 +108,18 @@ app.use('*', authMiddleware);
 // 3. 核心路由：系统初始化与认证
 // =================================================================================
 
-// 系统初始化
 app.get('/setup', async (c) => {
     const db = c.get('db');
     try {
         await db.initDB();
-        
         const admin = await data.findUserByName(db, 'admin');
         if (!admin) {
             const bcrypt = await import('bcryptjs');
             const salt = bcrypt.genSaltSync(10);
             const hash = bcrypt.hashSync('admin', salt);
-            
             const newUser = await data.createUser(db, 'admin', hash);
             await db.run("UPDATE users SET is_admin = 1 WHERE id = ?", [newUser.id]);
             await data.createFolder(db, '/', null, newUser.id);
-            
             return c.text("✅ 初始化成功: 预设管理员 admin / admin");
         }
         return c.text("✅ 数据库结构已就绪");
@@ -143,11 +128,9 @@ app.get('/setup', async (c) => {
     }
 });
 
-// 登录处理
 app.post('/login', async (c) => {
     const { username, password } = await c.req.parseBody();
     const db = c.get('db');
-    
     const user = await data.findUserByName(db, username);
     const bcrypt = await import('bcryptjs');
     
@@ -155,35 +138,22 @@ app.post('/login', async (c) => {
         const array = new Uint8Array(32);
         crypto.getRandomValues(array);
         const token = Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-        
         const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
         await data.createAuthToken(db, user.id, token, expiresAt);
-        
-        setCookie(c, 'remember_me', token, {
-            httpOnly: true,
-            secure: true,
-            maxAge: 30 * 24 * 60 * 60,
-            path: '/'
-        });
-        
+        setCookie(c, 'remember_me', token, { httpOnly: true, secure: true, maxAge: 30 * 24 * 60 * 60, path: '/' });
         return c.redirect('/');
     } else {
         return c.text('账号或密码错误', 401);
     }
 });
 
-// 注册处理
 app.post('/register', async (c) => {
     const { username, password } = await c.req.parseBody();
     if (!username || !password) return c.text('用户名和密码不能为空', 400);
-    
     const db = c.get('db');
     if (await data.findUserByName(db, username)) return c.text('用户名已存在', 400);
-    
     const bcrypt = await import('bcryptjs');
-    const salt = bcrypt.genSaltSync(10);
-    const hash = bcrypt.hashSync(password, salt);
-    
+    const hash = bcrypt.hashSync(password, 10);
     try {
         const newUser = await data.createUser(db, username, hash);
         await data.createFolder(db, '/', null, newUser.id);
@@ -193,7 +163,6 @@ app.post('/register', async (c) => {
     }
 });
 
-// 登出
 app.get('/logout', async (c) => {
     const token = getCookie(c, 'remember_me');
     if (token) {
@@ -208,7 +177,6 @@ app.get('/logout', async (c) => {
 // 4. 分享功能路由
 // =================================================================================
 
-// 分享页面 HTML Shell (用于 KV 中可能不存在的动态渲染页面，或者作为 fallback)
 const SHARE_HTML = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -234,20 +202,14 @@ const SHARE_HTML = `
         const pathParts = window.location.pathname.split('/');
         const token = pathParts.pop();
         const app = document.getElementById('app');
-
         async function load() {
             try {
                 const res = await fetch('/api/public/share/' + token);
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.message || '加载失败');
-
-                if (data.isLocked && !data.isUnlocked) {
-                    renderPasswordForm(data.name);
-                } else if (data.type === 'file') {
-                    renderFile(data);
-                } else {
-                    renderFolder(data);
-                }
+                if (data.isLocked && !data.isUnlocked) renderPasswordForm(data.name);
+                else if (data.type === 'file') renderFile(data);
+                else renderFolder(data);
             } catch (e) {
                 app.innerHTML = '<div style="text-align:center;color:red;"><h3>错误</h3><p>' + e.message + '</p></div>';
             }
@@ -268,8 +230,8 @@ const SHARE_HTML = `
         }
         function renderFolder(data) {
             let html = \`<h3>\${data.name} (文件夹)</h3><div class="list">\`;
-            if(data.folders) data.folders.forEach(f => { html += \`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`; });
-            if(data.files) data.files.forEach(f => { html += \`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`; });
+            if(data.folders) data.folders.forEach(f => html += \`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`);
+            if(data.files) data.files.forEach(f => html += \`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`);
             html += '</div>'; app.innerHTML = html;
         }
         load();
@@ -281,40 +243,17 @@ const SHARE_HTML = `
 app.get('/api/public/share/:token', async (c) => {
     const db = c.get('db');
     const token = c.req.param('token');
-    
     let item = await data.getFileByShareToken(db, token);
     let type = 'file';
-    
-    if (!item) {
-        item = await data.getFolderByShareToken(db, token);
-        type = 'folder';
-    }
-
-    if (!item) return c.json({ success: false, message: '分享链接无效或已过期' }, 404);
-
+    if (!item) { item = await data.getFolderByShareToken(db, token); type = 'folder'; }
+    if (!item) return c.json({ success: false, message: '无效链接' }, 404);
     const isLocked = !!item.share_password;
     const unlockCookie = getCookie(c, `share_unlock_${token}`);
     const isUnlocked = unlockCookie === 'true';
-
-    if (isLocked && !isUnlocked) {
-        return c.json({ success: true, type, isLocked: true, isUnlocked: false, name: type === 'file' ? item.fileName : item.name });
-    }
-
-    if (type === 'file') {
-        return c.json({
-            success: true, type: 'file', isLocked, isUnlocked: true,
-            name: item.fileName, size: item.size, date: item.date, mimeType: item.mimetype,
-            downloadUrl: `/share/download/${token}`
-        });
-    } else {
-        const contents = await data.getFolderContents(db, item.id, item.user_id);
-        const safeFolders = contents.folders.map(f => ({ name: f.name, size: 0, type: 'folder' }));
-        const safeFiles = contents.files.map(f => ({ name: f.fileName, size: f.size, date: f.date, type: 'file', id: f.message_id }));
-        return c.json({
-            success: true, type: 'folder', isLocked, isUnlocked: true,
-            name: item.name, files: safeFiles, folders: safeFolders
-        });
-    }
+    if (isLocked && !isUnlocked) return c.json({ success: true, type, isLocked: true, isUnlocked: false, name: type === 'file' ? item.fileName : item.name });
+    if (type === 'file') return c.json({ success: true, type: 'file', isLocked, isUnlocked: true, name: item.fileName, size: item.size, date: item.date, mimeType: item.mimetype, downloadUrl: `/share/download/${token}` });
+    const contents = await data.getFolderContents(db, item.id, item.user_id);
+    return c.json({ success: true, type: 'folder', isLocked, isUnlocked: true, name: item.name, files: contents.files.map(f => ({ name: f.fileName, size: f.size, date: f.date, type: 'file', id: f.message_id })), folders: contents.folders.map(f => ({ name: f.name, size: 0, type: 'folder' })) });
 });
 
 app.post('/api/public/share/:token/auth', async (c) => {
@@ -322,7 +261,6 @@ app.post('/api/public/share/:token/auth', async (c) => {
     let item = await data.getFileByShareToken(db, token);
     if (!item) item = await data.getFolderByShareToken(db, token);
     if (!item) return c.json({ success: false, message: '无效链接' }, 404);
-
     const bcrypt = await import('bcryptjs');
     if (item.share_password && bcrypt.compareSync(password, item.share_password)) {
         setCookie(c, `share_unlock_${token}`, 'true', { path: '/', maxAge: 86400, httpOnly: true, secure: true });
@@ -335,10 +273,7 @@ app.get('/share/download/:token', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const token = c.req.param('token');
     const file = await data.getFileByShareToken(db, token);
     if (!file) return c.text('File not found', 404);
-    if (file.share_password) {
-         const unlockCookie = getCookie(c, `share_unlock_${token}`);
-         if (unlockCookie !== 'true') return c.text('Password required', 403);
-    }
+    if (file.share_password && getCookie(c, `share_unlock_${token}`) !== 'true') return c.text('Password required', 403);
     try {
         const { stream, contentType, headers } = await storage.download(file.file_id, file.user_id);
         const responseHeaders = new Headers(headers);
@@ -349,7 +284,6 @@ app.get('/share/download/:token', async (c) => {
 });
 
 app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
-
 
 // =================================================================================
 // 5. 核心业务路由
@@ -366,31 +300,26 @@ app.get('/', async (c) => {
     return c.redirect(`/view/${encrypt(root.id)}`);
 });
 
-// 获取文件夹内容
 app.get('/api/folder/:encryptedId', async (c) => {
     const db = c.get('db'); const user = c.get('user'); const encId = c.req.param('encryptedId');
     const folderIdStr = decrypt(encId);
     if (!folderIdStr) return c.json({ success: false, message: '无效 ID' }, 400);
-    const folderId = parseInt(folderIdStr);
     try {
-        const result = await data.getFolderContents(db, folderId, user.id);
-        const pathArr = await data.getFolderPath(db, folderId, user.id);
+        const result = await data.getFolderContents(db, parseInt(folderIdStr), user.id);
+        const pathArr = await data.getFolderPath(db, parseInt(folderIdStr), user.id);
         return c.json({ contents: result, path: pathArr });
     } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 获取所有文件夹
 app.get('/api/folders', async (c) => {
     try { return c.json(await data.getAllFolders(c.get('db'), c.get('user').id)); } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 文件上传
 app.post('/upload', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user'); const config = c.get('config');
     const body = await c.req.parseBody(); 
     const folderId = parseInt(decrypt(c.req.query('folderId')));
     if (isNaN(folderId)) return c.json({ success: false, message: '缺少或无效的 folderId' }, 400);
-
     const files = [];
     Object.keys(body).forEach(key => {
         const value = body[key];
@@ -398,10 +327,8 @@ app.post('/upload', async (c) => {
         else if (Array.isArray(value)) value.forEach(v => { if (v instanceof File) files.push(v); });
     });
     if (files.length === 0) return c.json({ success: false, message: '没有检测到文件' }, 400);
-
     const totalSize = files.reduce((acc, f) => acc + f.size, 0);
     if (!await data.checkQuota(db, user.id, totalSize)) return c.json({ success: false, message: '空间不足' }, 413);
-
     const results = [];
     for (const file of files) {
         try {
@@ -431,9 +358,6 @@ app.get('/download/proxy/:messageId', async (c) => {
     } catch (e) { return c.text(`Download failed: ${e.message}`, 500); }
 });
 
-// =================================================================================
-// 6. 其他 API
-// =================================================================================
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
 app.post('/api/folder/create', async (c) => {
     const { name, parentId } = await c.req.json();
@@ -495,7 +419,6 @@ app.post('/api/folder/lock', async (c) => {
     return c.json({success:true});
 });
 
-// Admin
 app.get('/api/admin/users', adminMiddleware, async (c) => c.json(await data.listAllUsers(c.get('db'))));
 app.get('/api/admin/users-with-quota', adminMiddleware, async (c) => c.json({users: await data.listAllUsersWithQuota(c.get('db'))}));
 app.post('/api/admin/storage-mode', adminMiddleware, async (c) => {
