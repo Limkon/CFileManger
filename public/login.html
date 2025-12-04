@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>登入</title>
+  <title>登录</title>
   <style>
     :root {
       --primary-color: #007bff;
@@ -60,24 +60,22 @@
       box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
     }
     
-    /* --- 新增样式：用于复选框 --- */
     .form-group-inline {
       margin-bottom: 20px;
       text-align: left;
       display: flex;
       align-items: center;
-      justify-content: flex-start; /* 左对齐 */
-      gap: 8px; /* 标签和选框的间距 */
+      justify-content: flex-start;
+      gap: 8px;
     }
     .form-group-inline label {
-      margin-bottom: 0; /* 移除 label 的底部边距 */
+      margin-bottom: 0;
       font-weight: 500;
       cursor: pointer;
     }
     .form-group-inline input {
-      width: auto; /* 恢复复选框的自动宽度 */
+      width: auto;
     }
-    /* --- 样式结束 --- */
 
     button[type="submit"] {
       width: 100%;
@@ -109,7 +107,7 @@
 </head>
 <body>
   <div class="login-container">
-    <h2>登入网络硬盘</h2>
+    <h2>登录网络硬盘</h2>
     <form id="loginForm" action="/login" method="post">
       <div class="form-group">
         <label for="username">用户名</label>
@@ -122,12 +120,12 @@
       
       <div class="form-group-inline">
         <input id="remember" name="remember" type="checkbox">
-        <label for="remember">保持登陆</label>
+        <label for="remember">保持登录</label>
       </div>
-      <button type="submit">登入</button>
+      <button type="submit">登录</button>
     </form>
     <div class="register-link">
-        还没有帐号？ <a href="/register">点此注册</a>
+        还没有账号？ <a href="/register">点此注册</a>
     </div>
   </div>
 
@@ -139,7 +137,7 @@
 
       const handleEnter = (event) => {
         if (event.key === 'Enter') {
-          event.preventDefault(); // 防止预设的换行行为
+          event.preventDefault();
           form.submit();
         }
       };
