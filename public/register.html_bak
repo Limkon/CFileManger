@@ -1,18 +1,17 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>注册新帐号</title>
+  <title>注册账号</title>
   <style>
     :root {
-      --primary-color: #28a745;
+      --primary-color: #28a745; /* 使用绿色区分注册 */
       --background-color: #f4f7f6;
       --card-background: #ffffff;
       --text-color: #333;
       --input-border-color: #ccc;
       --button-hover-color: #218838;
-      --error-color: #dc3545;
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
@@ -80,71 +79,46 @@
         font-size: 14px;
     }
     .login-link a {
-        color: var(--primary-color);
+        color: #007bff;
         text-decoration: none;
     }
     .login-link a:hover {
         text-decoration: underline;
     }
-    .error-message {
-        color: var(--error-color);
-        font-size: 12px;
-        margin-top: 5px;
-        display: none;
-    }
   </style>
 </head>
 <body>
   <div class="login-container">
-    <h2>注册新帐号</h2>
+    <h2>注册新账号</h2>
     <form id="registerForm" action="/register" method="post">
       <div class="form-group">
         <label for="username">用户名</label>
-        <input id="username" name="username" placeholder="请输入用户名" required>
+        <input id="username" name="username" placeholder="设置用户名" required>
       </div>
       <div class="form-group">
         <label for="password">密码</label>
-        <input id="password" name="password" type="password" placeholder="请输入密码" required>
+        <input id="password" name="password" type="password" placeholder="设置密码" required>
       </div>
       <div class="form-group">
         <label for="confirm_password">确认密码</label>
-        <input id="confirm_password" name="confirm_password" type="password" placeholder="请再次输入密码" required>
-        <div id="passwordError" class="error-message">两次输入的密码不匹配</div>
+        <input id="confirm_password" name="confirm_password" type="password" placeholder="再次输入密码" required>
       </div>
-      <button type="submit">注册</button>
+      
+      <button type="submit">立即注册</button>
     </form>
     <div class="login-link">
-        已有帐号？ <a href="/login">点此登入</a>
+        已有账号？ <a href="/login">返回登录</a>
     </div>
   </div>
+
   <script>
-    document.addEventListener('DOMContentLoaded', () => {
-      const form = document.getElementById('registerForm');
-      const password = document.getElementById('password');
-      const confirmPassword = document.getElementById('confirm_password');
-      const passwordError = document.getElementById('passwordError');
-
-      form.addEventListener('submit', function(event) {
-        if (password.value !== confirmPassword.value) {
-          event.preventDefault(); // 阻止表单提交
-          passwordError.style.display = 'block';
-          confirmPassword.style.borderColor = 'var(--error-color)';
+    document.getElementById('registerForm').addEventListener('submit', function(e) {
+        const p1 = document.getElementById('password').value;
+        const p2 = document.getElementById('confirm_password').value;
+        if (p1 !== p2) {
+            e.preventDefault();
+            alert('两次输入的密码不一致！');
         }
-      });
-
-      // 当使用者开始重新输入时，隐藏错误讯息
-      confirmPassword.addEventListener('input', function() {
-        if (passwordError.style.display === 'block') {
-          passwordError.style.display = 'none';
-          confirmPassword.style.borderColor = 'var(--input-border-color)';
-        }
-      });
-      password.addEventListener('input', function() {
-         if (password.value === confirmPassword.value) {
-           passwordError.style.display = 'none';
-           confirmPassword.style.borderColor = 'var(--input-border-color)';
-         }
-      });
     });
   </script>
 </body>
