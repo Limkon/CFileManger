@@ -1,6 +1,7 @@
 name = "network-file-manager"
 main = "src/worker.js"
 compatibility_date = "2023-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 # 前端靜態文件配置 (必須有這段，否則網頁打不開)
 [site]
