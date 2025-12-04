@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -28,10 +28,11 @@
       <div class="header-buttons">
         <button id="trashBtn" class="upload-link-btn" style="background-color: #6c757d;" title="回收站"><i class="fas fa-trash-restore"></i></button>
         <button id="view-switch-btn" class="upload-link-btn" title="切换视图"><i class="fas fa-list"></i></button>
-        <a href="/shares-page" class="upload-link-btn"><i class="fas fa-share-alt"></i><span class="button-text"> 管理共享</span></a>
+        <a href="/shares.html" class="upload-link-btn"><i class="fas fa-share-alt"></i><span class="button-text"> 管理分享</span></a>
+        <a href="/admin.html" class="upload-link-btn" id="adminLink" style="background-color: #6f42c1;"><i class="fas fa-cog"></i><span class="button-text"> 管理后台</span></a>
         <button id="showUploadModalBtn" class="upload-link-btn"><i class="fas fa-upload"></i><span class="button-text"> 上传文件</span></button>
         <button id="changePasswordBtn" class="upload-link-btn"><i class="fas fa-key"></i><span class="button-text"> 修改密码</span></button>
-        <button id="logoutBtn" class="upload-link-btn"><i class="fas fa-sign-out-alt"></i><span class="button-text"> 登出</span></button>
+        <button id="logoutBtn" class="upload-link-btn"><i class="fas fa-sign-out-alt"></i><span class="button-text"> 退出登录</span></button>
       </div>
     </header>
 
@@ -39,7 +40,7 @@
         <nav class="breadcrumb" id="breadcrumb" style="margin-bottom: 0; flex-grow: 1;"></nav>
         <form class="search-form" id="searchForm">
             <i class="fas fa-search"></i>
-            <input type="search" id="searchInput" placeholder="搜寻所有文件...">
+            <input type="search" id="searchInput" placeholder="搜索所有文件...">
         </form>
     </div>
     
@@ -59,21 +60,21 @@
             <div class="list-body" id="itemListBody"></div>
         </div>
         <div id="dropZoneOverlay">
-            <span>将拖到此处以上传</span>
+            <span>将文件拖到此处以上传</span>
         </div>
         
         <div id="contextMenu" class="context-menu">
             <div id="selectionInfo"></div>
             <hr id="contextMenuSeparatorTop">
             
-            <button id="createFolderBtn" title="建立文件夹" class="normal-mode-btn"><i class="fas fa-folder-plus"></i> <span class="button-text">新建文件夹</span></button>
-            <button id="textEditBtn" title="新建文字档" class="normal-mode-btn"><i class="fas fa-file-alt"></i> <span class="button-text">新建/编辑文件</span></button>
+            <button id="createFolderBtn" title="新建文件夹" class="normal-mode-btn"><i class="fas fa-folder-plus"></i> <span class="button-text">新建文件夹</span></button>
+            <button id="textEditBtn" title="新建文本文件" class="normal-mode-btn"><i class="fas fa-file-alt"></i> <span class="button-text">新建/编辑文件</span></button>
             
             <hr id="contextMenuSeparator1" class="normal-mode-btn">
             
             <button id="openBtn" title="打开" disabled class="normal-mode-btn"><i class="fas fa-folder-open"></i> <span class="button-text">打开</span></button>
             <button id="previewBtn" title="预览" disabled class="normal-mode-btn"><i class="fas fa-eye"></i> <span class="button-text">预览</span></button>
-            <button id="lockBtn" title="加密/解密资料夾" disabled class="normal-mode-btn"><i class="fas fa-lock"></i> <span class="button-text">加密</span></button>
+            <button id="lockBtn" title="加密/解密文件夹" disabled class="normal-mode-btn"><i class="fas fa-lock"></i> <span class="button-text">加密</span></button>
             <button id="moveBtn" title="移动" disabled class="normal-mode-btn"><i class="fas fa-people-arrows"></i> <span class="button-text">移动</span></button>
             <button id="shareBtn" title="分享" disabled class="normal-mode-btn"><i class="fas fa-share-alt"></i> <span class="button-text">分享</span></button>
             <button id="renameBtn" title="重命名" disabled class="normal-mode-btn"><i class="fas fa-i-cursor"></i> <span class="button-text">重命名</span></button>
@@ -114,7 +115,7 @@
                 <option value="24h" selected>24 小时</option>
                 <option value="7d">7 天</option>
                 <option value="0">永久有效</option>
-                <option value="custom">自订时间</option>
+                <option value="custom">自定义时间</option>
             </select>
             <input type="datetime-local" id="customExpiresInput" style="display: none; margin-top: 15px; width: 100%; box-sizing: border-box; padding: 8px;">
             <input type="password" id="sharePasswordInput" placeholder="设定分享密码 (留空则不设密码)" style="margin-top: 15px;">
@@ -133,7 +134,7 @@
   <div id="moveModal" class="modal">
     <div class="move-modal-content">
         <h3>移动到...</h3>
-        <p>请选择目标夹：</p>
+        <p>请选择目标文件夹：</p>
         <div id="folderTree"></div>
         <button id="confirmMoveBtn" disabled>确定移动</button>
         <button id="cancelMoveBtn">取消</button>
@@ -174,7 +175,7 @@
         </div>
         <div id="applyToAllContainer" style="margin-top: 15px; text-align: left;">
             <input type="checkbox" id="applyToAllCheckbox">
-            <label for="applyToAllCheckbox">对所有后续的档案冲突执行相同操作</label>
+            <label for="applyToAllCheckbox">对所有后续的文件冲突执行相同操作</label>
         </div>
     </div>
   </div>
@@ -207,7 +208,7 @@
                 <label for="fileInput" class="custom-upload-btn"><i class="fas fa-file"></i> 选择文件</label>
                 <input type="file" name="files" id="fileInput" multiple />
                 
-                <label for="folderInput" class="custom-upload-btn"><i class="fas fa-folder"></i> 选择目录</label>
+                <label for="folderInput" class="custom-upload-btn"><i class="fas fa-folder"></i> 选择文件夹</label>
                 <input type="file" id="folderInput" webkitdirectory directory />
             </div>
 
