@@ -1,97 +1,95 @@
 // storage/index.js
 const telegramStorage = require('./telegram');
-const localStorage = require('./local');
+// 移除 local storage 引用
+// const localStorage = require('./local'); 
 const webdavStorage = require('./webdav');
-const s3Storage = require('./s3'); // 引入 S3 存储模块
-const fs = require('fs');
-const path = require('path');
+const s3Storage = require('./s3');
+const db = require('../database.js'); // 引入数据库以使用 KV
 
-const CONFIG_FILE = path.join(__dirname, '..', 'data', 'config.json');
+// 内存缓存配置，避免每次同步调用都查库
+let cachedConfig = {
+    storageMode: 'telegram', // 默认改为 telegram
+    uploadMode: 'stream',
+    webdav: {},
+    s3: {}
+};
 
-function readConfig() {
+// 初始化函数：从数据库加载配置到缓存
+async function init() {
     try {
-        if (fs.existsSync(CONFIG_FILE)) {
-            const rawData = fs.readFileSync(CONFIG_FILE);
-            const config = JSON.parse(rawData);
-            // 确保 webdav 设定存在且为物件
-            if (!config.webdav || Array.isArray(config.webdav)) {
-                config.webdav = {}; 
-            }
-            // 确保 s3 设定存在且为物件 (新增)
-            if (!config.s3 || Array.isArray(config.s3)) {
-                config.s3 = {}; 
-            }
-            // 确保 uploadMode 存在
-            if (!config.uploadMode) {
-                config.uploadMode = 'stream';
-            }
-            return config;
+        const config = await db.getConfig();
+        if (config) {
+            // 合并配置，确保新字段有默认值
+            cachedConfig = { ...cachedConfig, ...config };
+            
+            // 确保对象字段存在
+            if (!cachedConfig.webdav || Array.isArray(cachedConfig.webdav)) cachedConfig.webdav = {};
+            if (!cachedConfig.s3 || Array.isArray(cachedConfig.s3)) cachedConfig.s3 = {};
+            
+            // 初始化客户端
+            if (cachedConfig.storageMode === 'webdav') webdavStorage.resetClient();
+            if (cachedConfig.storageMode === 's3') s3Storage.resetClient();
+            
+            console.log(`[Config] 配置加载成功，当前模式: ${cachedConfig.storageMode}`);
         }
     } catch (error) {
-        // console.error("读取设定档失败:", error);
+        console.error("读取 KV 设定失败:", error);
     }
-    // 添加 s3 的默认空配置
-    return { storageMode: 'local', uploadMode: 'stream', webdav: {}, s3: {} }; 
 }
 
-function writeConfig(config) {
+// 同步读取 (返回缓存)
+function readConfig() {
+    return cachedConfig;
+}
+
+// 异步写入 (写入 KV 并更新缓存)
+async function writeConfig(newConfigPart) {
     try {
-        // 读取现有配置以保留未修改的字段
-        const currentConfig = readConfig();
-        const newConfig = { ...currentConfig, ...config };
+        const newConfig = { ...cachedConfig, ...newConfigPart };
         
-        fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+        await db.saveConfig(newConfig);
+        cachedConfig = newConfig; // 更新缓存
         
-        // 如果是 WebDAV 或 S3 设定变更，则重置客户端以使用新设定
-        if (newConfig.storageMode === 'webdav') {
-            webdavStorage.resetClient();
-        } else if (newConfig.storageMode === 's3') { // 新增 S3 重置
-            s3Storage.resetClient();
-        }
+        // 重置客户端
+        if (newConfig.storageMode === 'webdav') webdavStorage.resetClient();
+        if (newConfig.storageMode === 's3') s3Storage.resetClient();
         
         return true;
     } catch (error) {
-        // console.error("写入设定档失败:", error);
+        console.error("写入 KV 设定失败:", error);
         return false;
     }
 }
 
-let config = readConfig();
-
 function getStorage() {
-    config = readConfig(); 
-    if (config.storageMode === 'local') {
-        return localStorage;
-    }
-    if (config.storageMode === 'webdav') {
+    // 根据缓存的配置返回对应的 storage 模块
+    if (cachedConfig.storageMode === 'webdav') {
         return webdavStorage;
     }
-    if (config.storageMode === 's3') { // 返回 S3 存储模块 (新增)
+    if (cachedConfig.storageMode === 's3') {
         return s3Storage;
     }
+    // 默认为 telegram，local 已被移除
     return telegramStorage;
 }
 
-function setStorageMode(mode) {
-    if (['local', 'telegram', 'webdav', 's3'].includes(mode)) { // 添加 's3'
-        const current = readConfig();
-        current.storageMode = mode;
-        return writeConfig(current);
+// 包装成异步函数以保持 API 一致性，虽然内部只更新了缓存标记
+async function setStorageMode(mode) {
+    if (['telegram', 'webdav', 's3'].includes(mode)) {
+        return await writeConfig({ storageMode: mode });
     }
     return false;
 }
 
-// --- 设定上传模式 (保留) ---
-function setUploadMode(mode) {
+async function setUploadMode(mode) {
     if (['stream', 'buffer'].includes(mode)) {
-        const current = readConfig();
-        current.uploadMode = mode;
-        return writeConfig(current);
+        return await writeConfig({ uploadMode: mode });
     }
     return false;
 }
 
 module.exports = {
+    init,
     getStorage,
     setStorageMode,
     setUploadMode, 
