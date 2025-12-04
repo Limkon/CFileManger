@@ -1,20 +1,20 @@
 // src/data.js
 
-import path from 'path';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from './crypto.js';
 
-// 內存中的鎖，用於防止並發創建同名文件夾
+// 内存中的锁，用于防止并发创建同名文件夹 (注意：在 Workers 中仅对当前实例有效)
 const creatingFolders = new Set();
 
-// --- SQL 輔助常量 ---
+// --- SQL 辅助常量 ---
 const ALL_FILE_COLUMNS = `
     fileName, mimetype, file_id, thumb_file_id, date, size, folder_id, user_id, storage_type, is_deleted, deleted_at
 `;
 const SAFE_SELECT_MESSAGE_ID = `CAST(message_id AS TEXT) AS message_id`;
 const SAFE_SELECT_ID_AS_TEXT = `CAST(message_id AS TEXT) AS id`;
 
-// --- 用戶管理 ---
+// --- 用户管理 ---
 
 export async function createUser(db, username, hashedPassword) {
     const sql = `INSERT INTO users (username, password, is_admin, max_storage_bytes) VALUES (?, ?, 0, 1073741824)`;
@@ -47,14 +47,14 @@ export async function listAllUsers(db) {
 }
 
 export async function deleteUser(db, userId) {
-    // 注意：Workers 中無法刪除本地文件目錄，僅刪除數據庫記錄
-    // 如果需要清理 S3/WebDAV 中的文件，需要額外邏輯遍歷刪除
+    // 注意：Workers 中无法删除本地文件目录，仅删除数据库记录
+    // 如果需要清理 S3/WebDAV 中的文件，需要额外逻辑遍历删除
     const sql = `DELETE FROM users WHERE id = ? AND is_admin = 0`;
     const result = await db.run(sql, [userId]);
     return { success: true, changes: result.meta.changes };
 }
 
-// --- 用戶配額管理 ---
+// --- 用户配额管理 ---
 
 export async function getUserQuota(db, userId) {
     const user = await db.get("SELECT max_storage_bytes FROM users WHERE id = ?", [userId]);
@@ -78,7 +78,7 @@ export async function listAllUsersWithQuota(db) {
     const userIds = users.map(u => u.id);
     if (userIds.length === 0) return [];
     
-    // D1 不支持數組參數展開，需手動構造占位符
+    // D1 不支持数组参数展开，需手动构造占位符
     const placeholders = userIds.map(() => '?').join(',');
     const usageSql = `SELECT user_id, SUM(size) as total_size FROM files WHERE user_id IN (${placeholders}) GROUP BY user_id`;
     const usageData = await db.all(usageSql, userIds);
@@ -100,7 +100,7 @@ export async function setMaxStorageForUser(db, userId, maxBytes) {
     return { success: true, changes: result.meta.changes };
 }
 
-// --- 搜索與列表 ---
+// --- 搜索与列表 ---
 
 export async function searchItems(db, query, userId) {
     const searchQuery = `%${query}%`;
@@ -247,7 +247,7 @@ export async function getFolderPath(db, folderId, userId) {
             pathArr.unshift({ id: folder.id, name: folder.name, encrypted_id: encrypt(folder.id) });
             currentId = folder.parent_id;
         } else {
-            // 為了保持兼容性，如果找不到父級但 ID 存在，可能需要處理，但通常 loop 會正常結束
+            // 为了保持兼容性，如果找不到父级但 ID 存在，可能需要处理，但通常 loop 会正常结束
             break;
         }
     }
@@ -282,7 +282,7 @@ export async function createFolder(db, name, parentId, userId) {
         const result = await db.run(sql, [name, parentId, userId]);
         return { success: true, id: result.meta.last_row_id };
     } catch (err) {
-        // D1/SQLite UNIQUE 約束錯誤處理
+        // D1/SQLite UNIQUE 约束错误处理
         if (err.message && err.message.includes('UNIQUE')) {
             const row = await db.get("SELECT id, is_deleted FROM folders WHERE name = ? AND parent_id = ? AND user_id = ?", [name, parentId, userId]);
             if (row) {
@@ -328,7 +328,7 @@ export async function getAllFolders(db, userId) {
     }));
 }
 
-// --- 文件/文件夾移動與重命名 (核心邏輯) ---
+// --- 文件/文件夹移动与重命名 (核心逻辑) ---
 
 export async function moveItem(db, storage, itemId, itemType, targetFolderId, userId, options = {}, depth = 0) {
     const { resolutions = {}, pathPrefix = '' } = options;
@@ -436,16 +436,16 @@ export async function unifiedDelete(db, storage, itemId, itemType, userId, expli
         }
     }
     
-    // 物理刪除 (如果 storage 對象存在且支持)
+    // 物理删除 (如果 storage 对象存在且支持)
     if (storage && storage.remove) {
         try {
             await storage.remove(filesForStorage, foldersForStorage, userId);
         } catch (err) {
-            console.error("實體檔案刪除失敗:", err);
+            console.error("实体文件删除失败:", err);
         }
     }
     
-    // 數據庫刪除
+    // 数据库删除
     const fileIdsToDelete = filesForStorage.map(f => BigInt(f.message_id));
     let folderIdsToDelete = foldersForStorage.map(f => f.id);
     
@@ -459,7 +459,7 @@ export async function unifiedDelete(db, storage, itemId, itemType, userId, expli
 }
 
 export async function moveItems(db, storage, fileIds = [], folderIds = [], targetFolderId, userId) {
-    // 物理移動 (僅 S3/WebDAV 支持)
+    // 物理移动 (仅 S3/WebDAV 支持)
     if (storage && (storage.type === 'webdav' || storage.type === 's3')) {
         const client = storage.type === 'webdav' ? storage.getClient() : null;
         const targetPathParts = await getFolderPath(db, targetFolderId, userId);
@@ -474,13 +474,17 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
                 if (storage.type === 'webdav' && client) {
                     await client.moveFile(oldRelativePath, newRelativePath);
                 }
-                // S3 移動通常是 Copy + Delete，由 storage 層封裝，這裡簡化假設 storage 有 moveFile 接口
-                // 或者需要在 storage 模塊中實現通用接口。
+                // S3 移动通常是 Copy + Delete，由 storage 层封装，这里简化假设 storage 有 moveFile 接口
+                // 或者需要在 storage 模块中实现通用接口。
+                // 注意：s3.js 中我们确实实现了 moveFile
+                if (storage.type === 's3') {
+                     await storage.moveFile(oldRelativePath, newRelativePath);
+                }
                 
                 await db.run('UPDATE files SET file_id = ? WHERE message_id = ?', [newRelativePath, file.message_id.toString()]);
             } catch (err) {
-                console.error(`物理移動文件失敗: ${file.fileName}`, err);
-                // 繼續執行，不中斷 DB 更新 (視需求而定)
+                console.error(`物理移动文件失败: ${file.fileName}`, err);
+                // 继续执行，不中断 DB 更新 (视需求而定)
             }
         }
         
@@ -494,20 +498,27 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
                  if (storage.type === 'webdav' && client) {
                     await client.moveFile(oldFullPath, newFullPath);
                  }
+                 if (storage.type === 's3') {
+                     // S3 不支持文件夹移动，需要递归移动文件夹下的所有文件
+                     // 但 s3.js 中 moveFile 仅针对单个对象。
+                     // 这里简化处理，若 S3 需要移动文件夹，通常需要列出所有对象并移动
+                     // 由于这里逻辑较复杂，且 S3 主要是对象存储，文件夹概念是虚拟的
+                     // 暂不在此处深入实现 S3 文件夹改名/移动的物理逻辑
+                 }
                 
-                // 更新子文件路徑
+                // 更新子文件路径
                 const descendantFiles = await getFilesRecursive(db, folder.id, userId);
                 for (const file of descendantFiles) {
                     const updatedFileId = file.file_id.replace(oldFullPath, newFullPath);
                     await db.run('UPDATE files SET file_id = ? WHERE message_id = ?', [updatedFileId, file.message_id.toString()]);
                 }
             } catch (err) {
-                 console.error(`物理移動文件夾失敗: ${folder.name}`, err);
+                 console.error(`物理移动文件夹失败: ${folder.name}`, err);
             }
         }
     }
 
-    // 數據庫更新
+    // 数据库更新
     if (fileIds.length > 0) {
         const place = fileIds.map(() => '?').join(',');
         await db.run(`UPDATE files SET folder_id = ? WHERE message_id IN (${place}) AND user_id = ?`, [targetFolderId, ...fileIds.map(id => id.toString()), userId]);
@@ -569,7 +580,7 @@ export async function getFolderDeletionData(db, folderId, userId) {
 export async function executeDeletion(db, fileIds, folderIds, userId) {
     if (fileIds.length === 0 && folderIds.length === 0) return { success: true };
     
-    // D1 暫時使用順序執行模擬事務
+    // D1 暂时使用顺序执行模拟事务
     if (fileIds.length > 0) {
         const stringFileIds = Array.from(new Set(fileIds)).map(id => id.toString());
         const place = stringFileIds.map(() => '?').join(',');
@@ -663,13 +674,15 @@ export async function renameFile(db, storage, messageId, newFileName, userId) {
                 const client = storage.getClient();
                 await client.moveFile(oldRelativePath, newRelativePath);
             }
-            // S3: 需在 Storage 層實現 rename/move
+             if (storage.type === 's3') {
+                await storage.moveFile(oldRelativePath, newRelativePath);
+            }
             
             const sql = `UPDATE files SET fileName = ?, file_id = ? WHERE message_id = ? AND user_id = ?`;
             await db.run(sql, [newFileName, newRelativePath, messageId.toString(), userId]);
             return { success: true };
         } catch(err) {
-            throw new Error(`實體檔案重命名失敗: ${err.message}`);
+            throw new Error(`实体文件重命名失败: ${err.message}`);
         }
     }
 
@@ -682,7 +695,7 @@ export async function renameFile(db, storage, messageId, newFileName, userId) {
 export async function renameAndMoveFile(db, storage, messageId, newFileName, targetFolderId, userId) {
     const files = await getFilesByIds(db, [messageId], userId);
     const file = files[0];
-    if (!file) throw new Error('File not found');
+    if (!file) throw new Error('文件未找到');
 
     if (storage && (storage.type === 'webdav' || storage.type === 's3')) {
         const targetPathParts = await getFolderPath(db, targetFolderId, userId);
@@ -695,11 +708,15 @@ export async function renameAndMoveFile(db, storage, messageId, newFileName, tar
                 const client = storage.getClient();
                 await client.moveFile(oldRelativePath, newRelativePath);
             }
+             if (storage.type === 's3') {
+                await storage.moveFile(oldRelativePath, newRelativePath);
+            }
+
             const sql = `UPDATE files SET fileName = ?, file_id = ?, folder_id = ? WHERE message_id = ? AND user_id = ?`;
             await db.run(sql, [newFileName, newRelativePath, targetFolderId, messageId.toString(), userId]);
             return { success: true };
         } catch(err) {
-            throw new Error(`實體檔案移動失敗: ${err.message}`);
+            throw new Error(`实体文件移动失败: ${err.message}`);
         }
     }
 
@@ -710,7 +727,7 @@ export async function renameAndMoveFile(db, storage, messageId, newFileName, tar
 
 export async function renameFolder(db, storage, folderId, newFolderName, userId) {
     const folder = await db.get("SELECT * FROM folders WHERE id=? AND user_id=?", [folderId, userId]);
-    if (!folder) return { success: false, message: '資料夾未找到。'};
+    if (!folder) return { success: false, message: '文件夹未找到。'};
     
     if (storage && (storage.type === 'webdav' || storage.type === 's3')) {
         const oldPathParts = await getFolderPath(db, folderId, userId);
@@ -722,6 +739,9 @@ export async function renameFolder(db, storage, folderId, newFolderName, userId)
                 const client = storage.getClient();
                 await client.moveFile(oldFullPath, newFullPath);
             }
+             if (storage.type === 's3') {
+                // S3 暂不支持直接重命名文件夹
+             }
             
             const descendantFiles = await getFilesRecursive(db, folderId, userId);
             for (const file of descendantFiles) {
@@ -729,19 +749,19 @@ export async function renameFolder(db, storage, folderId, newFolderName, userId)
                 await db.run('UPDATE files SET file_id = ? WHERE message_id = ?', [updatedFileId, file.message_id.toString()]);
             }
         } catch(e) {
-            throw new Error(`實體資料夾重命名失敗: ${e.message}`);
+            throw new Error(`实体文件夹重命名失败: ${e.message}`);
         }
     }
 
     const sql = `UPDATE folders SET name = ? WHERE id = ? AND user_id = ?`;
     const result = await db.run(sql, [newFolderName, folderId, userId]);
-    if (result.meta.changes === 0) return { success: false, message: '資料夾未找到。' };
+    if (result.meta.changes === 0) return { success: false, message: '文件夹未找到。' };
     return { success: true };
 }
 
 export async function renameAndMoveFolder(db, storage, folderId, newName, targetFolderId, userId) {
     const folder = await db.get("SELECT * FROM folders WHERE id=? AND user_id=?", [folderId, userId]);
-    if (!folder) throw new Error('Folder not found');
+    if (!folder) throw new Error('文件夹未找到');
 
     if (storage && (storage.type === 'webdav' || storage.type === 's3')) {
         const oldPathParts = await getFolderPath(db, folderId, userId);
@@ -763,7 +783,7 @@ export async function renameAndMoveFolder(db, storage, folderId, newName, target
                 await db.run('UPDATE files SET file_id = ? WHERE message_id = ?', [updatedFileId, file.message_id.toString()]);
             }
         } catch(err) {
-            throw new Error(`實體資料夾移動失敗: ${err.message}`);
+            throw new Error(`实体文件夹移动失败: ${err.message}`);
         }
     }
 
@@ -775,19 +795,19 @@ export async function renameAndMoveFolder(db, storage, folderId, newName, target
 export async function setFolderPassword(db, folderId, password, userId) {
     const sql = `UPDATE folders SET password = ? WHERE id = ? AND user_id = ?`;
     const result = await db.run(sql, [password, folderId, userId]);
-    if (result.meta.changes === 0) throw new Error('Folder not found');
+    if (result.meta.changes === 0) throw new Error('文件夹未找到');
     return { success: true };
 }
 
 export async function verifyFolderPassword(db, folderId, password, userId) {
     const folder = await getFolderDetails(db, folderId, userId);
-    if (!folder || !folder.password) throw new Error('Folder is not locked');
+    if (!folder || !folder.password) throw new Error('文件夹未加密');
     return await bcrypt.compare(password, folder.password);
 }
 
 export async function createShareLink(db, itemId, itemType, expiresIn, userId, password = null, customExpiresAt = null) {
-    // Workers 中可以使用 crypto.getRandomValues 或 Web Crypto API，這裡假設有 polyfill 或 node:crypto
-    // 簡單的隨機 Token 生成
+    // Workers 中可以使用 crypto.getRandomValues 或 Web Crypto API，这里假设有 polyfill 或 node:crypto
+    // 简单的随机 Token 生成
     const tokenArray = new Uint8Array(4);
     crypto.getRandomValues(tokenArray);
     const token = Array.from(tokenArray).map(b => b.toString(16).padStart(2, '0')).join('');
@@ -821,7 +841,7 @@ export async function createShareLink(db, itemId, itemType, expiresIn, userId, p
     const stringItemId = itemType === 'folder' ? itemId : itemId.toString();
     const result = await db.run(sql, [token, expiresAt, hashedPassword, stringItemId, userId]);
     
-    if (result.meta.changes === 0) return { success: false, message: '項目未找到。' };
+    if (result.meta.changes === 0) return { success: false, message: '项目未找到。' };
     return { success: true, token };
 }
 
@@ -850,7 +870,7 @@ export async function cancelShare(db, itemId, itemType, userId) {
     const sql = `UPDATE ${table} SET share_token = NULL, share_expires_at = NULL, share_password = NULL WHERE ${idColumn} = ? AND user_id = ?`;
     const stringItemId = itemType === 'folder' ? itemId : itemId.toString();
     const result = await db.run(sql, [stringItemId, userId]);
-    if (result.meta.changes === 0) return { success: false, message: '項目未找到' };
+    if (result.meta.changes === 0) return { success: false, message: '项目未找到' };
     return { success: true };
 }
 
@@ -947,7 +967,7 @@ export async function resolvePathToFolderId(db, startFolderId, pathParts, userId
     for (const part of pathParts) {
         if (!part) continue;
         const lockId = `${userId}-${currentParentId}-${part}`;
-        // 簡單的自旋鎖，防止並發創建
+        // 简单的自旋锁，防止并发创建
         while (creatingFolders.has(lockId)) {
             await new Promise(resolve => setTimeout(resolve, 50));
         }
@@ -958,7 +978,7 @@ export async function resolvePathToFolderId(db, startFolderId, pathParts, userId
                 if (row.is_deleted) {
                     const timestamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14);
                     const newName = `${part}_deleted_${timestamp}`;
-                    await renameFolder(db, null, row.id, newName, userId); // 不傳 storage 避免物理移動
+                    await renameFolder(db, null, row.id, newName, userId); // 不传 storage 避免物理移动
                     const newFolder = await createFolder(db, part, currentParentId, userId);
                     currentParentId = newFolder.id;
                 } else {
@@ -1015,7 +1035,7 @@ export async function getTrashContents(db, userId) {
 
 export async function softDeleteItems(db, fileIds = [], folderIds = [], userId) {
     const now = Date.now();
-    // 順序執行模擬事務
+    // 顺序执行模拟事务
     if (fileIds.length > 0) {
         const stringFileIds = fileIds.map(id => id.toString());
         const place = stringFileIds.map(() => '?').join(',');
