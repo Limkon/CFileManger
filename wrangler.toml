@@ -1,30 +1,18 @@
 name = "network-file-manager"
 main = "src/worker.js"
-compatibility_date = "2024-11-12"
-compatibility_flags = ["nodejs_compat"]
+compatibility_date = "2023-12-01"
 
-# 托管前端静态文件 (login.html, manager.html 等)
-# 确保这些文件在项目根目录的 public/ 文件夹下
-assets = { directory = "./public", binding = "ASSETS" }
+# 前端靜態文件配置 (必須有這段，否則網頁打不開)
+[site]
+bucket = "./public"
 
-# D1 数据库配置
-# 请运行 `npx wrangler d1 create filemanager-db` 获取 database_id
-[[d1_databases]]
-binding = "DB"
-database_name = "filemanager-db"
-database_id = "请替换为您的_DATABASE_ID"
-
-# KV 命名空间配置 (用于存储系统设置)
-# 请运行 `npx wrangler kv:namespace create CONFIG_KV` 获取 id
+# KV 配置
 [[kv_namespaces]]
 binding = "CONFIG_KV"
-id = "请替换为您的_KV_NAMESPACE_ID"
+id = "baff4384e03342e599638f826b563940"
 
-# 环境变量 (非敏感信息)
-[vars]
-# 可以在这里设置默认值，但建议通过 wrangler secret put 设置敏感信息
-
-# 注意：以下密钥必须通过 `npx wrangler secret put <KEY>` 设置：
-# - BOT_TOKEN (Telegram Bot Token)
-# - CHAT_ID (Telegram Chat ID)
-# - SESSION_SECRET (用于加密 Session ID 的随机长字符串)
+# D1 數據庫配置
+[[d1_databases]]
+binding = "DB"
+database_name = "netfile-db"
+database_id = "1f21da5d-46b1-4232-bf44-4689b7417467"
