@@ -16,12 +16,11 @@ const db = require('./database.js');
 const data = require('./data.js');
 const storageManager = require('./storage');
 const { encrypt, decrypt } = require('./crypto.js');
-// --- 新增：引入 WebDAV 模块以便直接调用 ---
 const webdavStorageModule = require('./storage/webdav');
 
 const app = express();
 
-// --- 新增：并发控制器类 ---
+// --- 并发控制器类 ---
 class ConcurrencyLimit {
     constructor(limit) {
         this.limit = limit;
@@ -31,7 +30,6 @@ class ConcurrencyLimit {
 
     async run(fn) {
         if (this.active >= this.limit) {
-            // 如果达到限制，等待队列中的 Promise 解决
             await new Promise(resolve => this.queue.push(resolve));
         }
         this.active++;
@@ -39,7 +37,6 @@ class ConcurrencyLimit {
             return await fn();
         } finally {
             this.active--;
-            // 任务完成，释放队列中的下一个任务
             if (this.queue.length > 0) {
                 this.queue.shift()();
             }
@@ -47,9 +44,8 @@ class ConcurrencyLimit {
     }
 }
 
-// 限制最大并发上传数为 10 (防止触发 Telegram/WebDAV 429 错误)
+// 限制最大并发上传数为 10
 const uploadLimiter = new ConcurrencyLimit(10);
-
 
 // 处理 JSON 中的 BigInt 序列化
 const jsonReplacer = (key, value) => {
@@ -86,7 +82,6 @@ async function cleanupTempDir() {
 cleanupTempDir();
 
 // --- 定时任务：清理回收站 ---
-// 每天检查一次，删除超过 30 天的文件
 setInterval(async () => {
     try {
         const result = await data.cleanupTrash(30);
@@ -112,7 +107,7 @@ const shareSession = session({
   secret: process.env.SESSION_SECRET + '-share',
   resave: false,
   saveUninitialized: true,
-  cookie: { /* maxAge 已移除，浏览器关闭即失效 */ }
+  cookie: { }
 });
 
 app.set('trust proxy', 1);
@@ -123,7 +118,7 @@ app.use(express.urlencoded({ extended: true, limit: '100kb' }));
 app.use(express.json({ limit: '5mb' }));
 app.use(cookieParser()); 
 
-// --- 自动登入中间件 (已修复) ---
+// --- 自动登入中间件 ---
 async function checkRememberMeCookie(req, res, next) {
     if (req.session.loggedIn) {
         return next();
@@ -139,11 +134,10 @@ async function checkRememberMeCookie(req, res, next) {
                 req.session.isAdmin = !!user.is_admin;
                 req.session.unlockedFolders = [];
                 
-                // --- 修正: 使用原子操作 rollAuthToken 解决竞争条件 (滚动 Token 机制) ---
+                // 滚动 Token
                 const newRememberToken = crypto.randomBytes(64).toString('hex');
                 const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
                 
-                // 旧逻辑的回退（如果 data.js 没有 rollAuthToken）：
                 await data.deleteAuthToken(rememberToken);
                 await data.createAuthToken(user.id, newRememberToken, expiresAt);
                 
@@ -165,7 +159,6 @@ async function checkRememberMeCookie(req, res, next) {
                 res.clearCookie('remember_me', { path: '/' });
             }
         } catch (err) {
-            // 此处通常捕获数据库锁定错误
             console.error('Check remember token error:', err);
             res.clearCookie('remember_me', { path: '/' });
         }
@@ -199,7 +192,7 @@ function requireAdmin(req, res, next) {
     }
 }
 
-// --- 新增：扫描功能辅助函数 ---
+// --- 扫描功能辅助函数 ---
 
 function getMimeType(filename) {
     const ext = path.extname(filename).toLowerCase();
@@ -210,46 +203,6 @@ function getMimeType(filename) {
         '.zip': 'application/zip', '.rar': 'application/x-rar-compressed', '.7z': 'application/x-7z-compressed'
     };
     return types[ext] || 'application/octet-stream';
-}
-
-async function syncLocalFolder(absPath, dbFolderId, userId, relativePath, logFunc) {
-    const items = await fsp.readdir(absPath, { withFileTypes: true });
-    for (const item of items) {
-        if (item.name.startsWith('.')) continue; // 跳过隐藏文件
-
-        const itemAbsPath = path.join(absPath, item.name);
-        const itemRelativePath = path.join(relativePath, item.name).replace(/\\/g, '/'); // 统一路径分隔符
-
-        if (item.isDirectory()) {
-            let folder = await data.findFolderByName(item.name, dbFolderId, userId);
-            let folderId;
-            if (!folder) {
-                logFunc('info', `[Local] 建立资料夾: ${itemRelativePath}`);
-                const result = await data.createFolder(item.name, dbFolderId, userId);
-                folderId = result.id;
-            } else {
-                folderId = folder.id;
-            }
-            await syncLocalFolder(itemAbsPath, folderId, userId, itemRelativePath, logFunc);
-        } else if (item.isFile()) {
-            const exists = await data.checkFullConflict(item.name, dbFolderId, userId);
-            if (!exists) {
-                const stats = await fsp.stat(itemAbsPath);
-                logFunc('success', `[Local] 汇入文件: ${itemRelativePath} (${stats.size} bytes)`);
-                
-                const messageId = BigInt(Date.now()) * 1000000n + BigInt(crypto.randomInt(1000000));
-                await data.addFile({
-                    message_id: messageId,
-                    fileName: item.name,
-                    mimetype: getMimeType(item.name),
-                    size: stats.size,
-                    file_id: itemRelativePath, // Local 使用相对路径
-                    thumb_file_id: null,
-                    date: Math.floor(stats.mtimeMs)
-                }, dbFolderId, userId, 'local');
-            }
-        }
-    }
 }
 
 async function syncWebDavFolder(client, remotePath, dbFolderId, userId, logFunc) {
@@ -304,7 +257,7 @@ app.get('/login', (req, res) => res.sendFile(path.join(__dirname, 'views/login.h
 app.get('/register', (req, res) => res.sendFile(path.join(__dirname, 'views/register.html')));
 app.get('/editor', requireLogin, (req, res) => res.sendFile(path.join(__dirname, 'views/editor.html')));
 
-// --- 新增：扫描 API 路由 ---
+// --- 扫描 API 路由 ---
 app.post('/api/scan/:storageType', requireAdmin, async (req, res) => {
     const { storageType } = req.params;
     const { userId } = req.body;
@@ -316,7 +269,6 @@ app.post('/api/scan/:storageType', requireAdmin, async (req, res) => {
 
     if (!userId) return res.status(400).json({ success: false, message: '缺少 User ID' });
 
-    // 增加超时设置
     req.setTimeout(600000); // 10分钟
 
     try {
@@ -325,19 +277,12 @@ app.post('/api/scan/:storageType', requireAdmin, async (req, res) => {
         const rootFolder = await data.getRootFolder(userId);
         if (!rootFolder) throw new Error("找不到使用者的根目录");
 
-        if (storageType === 'local') {
-            const userBaseDir = path.join(__dirname, 'data', 'uploads', String(userId));
-            if (!fs.existsSync(userBaseDir)) {
-                await fsp.mkdir(userBaseDir, { recursive: true });
-            }
-            await syncLocalFolder(userBaseDir, rootFolder.id, userId, '', logFunc);
-        } else if (storageType === 'webdav') {
-            // 确保 WebDAV 客户端使用最新配置
+        if (storageType === 'webdav') {
             webdavStorageModule.resetClient();
             const client = webdavStorageModule.getClient();
             await syncWebDavFolder(client, '/', rootFolder.id, userId, logFunc);
         } else {
-             throw new Error("不支持的存储类型");
+             throw new Error("不支持的存储类型或该功能已禁用");
         }
 
         res.json({ success: true, log: logs });
@@ -360,7 +305,6 @@ app.post('/login', async (req, res) => {
                 const rememberToken = crypto.randomBytes(64).toString('hex');
                 const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
                 try {
-                    // 如果勾选了“保持登录”，建立一个长期有效的 token
                     await data.createAuthToken(user.id, rememberToken, expiresAt);
                     res.cookie('remember_me', rememberToken, {
                         path: '/',
@@ -370,7 +314,6 @@ app.post('/login', async (req, res) => {
                     });
                     req.session.cookie.maxAge = 30 * 24 * 60 * 60 * 1000;
                 } catch (tokenError) {
-                    // 如果 token 创建失败（例如数据库锁定），记录错误，但不阻止登录
                     console.error('Login token creation failed:', tokenError);
                     req.session.cookie.expires = false;
                     req.session.cookie.maxAge = null;
@@ -384,7 +327,6 @@ app.post('/login', async (req, res) => {
             res.status(401).send('帐号或密码错误');
         }
     } catch(error) {
-        // 捕获数据库错误，返回 500
         console.error('Login process failed:', error); 
         res.status(500).send('登入时发生错误');
     }
@@ -398,7 +340,7 @@ app.post('/register', async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, salt);
         const newUser = await data.createUser(username, hashedPassword);
         await data.createFolder('/', null, newUser.id);
-        await fsp.mkdir(path.join(__dirname, 'data', 'uploads', String(newUser.id)), { recursive: true });
+        // 移除本地目录创建逻辑
         res.redirect('/login');
     } catch (error) {
         res.status(500).send('注册失败，使用者名称可能已被使用。');
@@ -443,7 +385,11 @@ app.post('/upload', requireLogin, async (req, res) => {
     const uploadMode = config.uploadMode || 'stream'; 
     const MAX_FILENAME_BYTES = 255; 
 
-    // 获取用户配额信息
+    // 安全检查
+    if (storage.type === 'local') {
+        return res.status(500).json({ success: false, message: '本地存储已禁用，请联系管理员。' });
+    }
+
     let quota;
     try {
         quota = await data.getUserQuota(userId);
@@ -462,11 +408,10 @@ app.post('/upload', requireLogin, async (req, res) => {
         
         const busboy = Busboy({ headers: req.headers });
         const uploadPromises = [];
-        let currentRequestUploadSize = 0; // 追踪本次请求累积的上传量 (仅 buffer 模式有效)
+        let currentRequestUploadSize = 0;
 
         busboy.on('file', (fieldname, fileStream, fileInfo) => {
             const relativePath = Buffer.from(fieldname, 'latin1').toString('utf8');
-            log('BUSBOY_FILE', `开始接收文件: ${relativePath}, Encoding: ${fileInfo.encoding}, Mime: ${fileInfo.mimeType}`);
             
             const fileUploadPromise = (async () => {
                 const { mimeType } = fileInfo;
@@ -480,7 +425,6 @@ app.post('/upload', requireLogin, async (req, res) => {
 
                 const action = resolutions[relativePath] || 'upload';
                 if (action === 'skip') {
-                    log('UPLOAD_SKIP', `跳过文件: ${finalFilename}`);
                     fileStream.resume();
                     return { skipped: true };
                 }
@@ -488,21 +432,14 @@ app.post('/upload', requireLogin, async (req, res) => {
                 const folderPathParts = pathParts;
                 const targetFolderId = await data.resolvePathToFolderId(initialFolderId, folderPathParts, userId);
                 
-                // --- 修复：处理回收站冲突 (初始检查) ---
-                // 如果上传的文件名直接与回收站冲突，先处理一次
                 await data.processTrashConflict(finalFilename, targetFolderId, userId);
-                // --- 修复结束 ---
 
                 let existingItem = null;
                 if (action === 'overwrite') {
                     existingItem = await data.findItemInFolder(finalFilename, targetFolderId, userId);
                 } else if (action === 'rename') {
                     finalFilename = await data.findAvailableName(finalFilename, targetFolderId, userId, false);
-                    // --- 关键修复：重命名后的二次冲突检查 ---
-                    // findAvailableName 仅检查了活跃文件，生成的 "A(1)" 可能在回收站中存在
-                    // 必须再次调用 processTrashConflict 移走回收站中的 "A(1)"
                     await data.processTrashConflict(finalFilename, targetFolderId, userId);
-                    // --- 修复结束 ---
                 } else {
                     const conflict = await data.findItemInFolder(finalFilename, targetFolderId, userId);
                     if (conflict) {
@@ -512,75 +449,48 @@ app.post('/upload', requireLogin, async (req, res) => {
                 }
                 
                 if (uploadMode === 'buffer') {
-                    // --- 缓冲模式：先写入本地临时文件 ---
                     const tempFileName = `${Date.now()}-${crypto.randomBytes(8).toString('hex')}-${path.basename(finalFilename)}`;
                     const tempFilePath = path.join(TMP_DIR, tempFileName);
-                    log('BUFFER_MODE', `缓冲写入临时文件: ${tempFilePath}`);
 
                     try {
-                        // 1. 写入临时文件
                         const writeStream = fs.createWriteStream(tempFilePath);
-                        
                         await new Promise((resolve, reject) => {
                             fileStream.pipe(writeStream);
-                            
                             fileStream.on('error', err => reject(err));
                             writeStream.on('error', err => reject(err));
                             writeStream.on('finish', resolve);
                         });
 
                         const stats = await fsp.stat(tempFilePath);
-                        if (stats.size === 0) {
-                             throw new Error("接收到的文件大小为 0 字节，上传中止。");
-                        }
+                        if (stats.size === 0) throw new Error("接收到的文件大小为 0 字节");
 
-                        // 2. 配额检查 (Buffer 模式可以精确检查)
-                        // 检查：已用空间 + 本次请求之前累积的 + 当前文件大小 > 最大配额
                         if (quota.used + currentRequestUploadSize + stats.size > quota.max) {
-                            throw new Error(`存储空间不足 (文件大小: ${stats.size} bytes, 剩余: ${quota.max - quota.used - currentRequestUploadSize} bytes)`);
+                            throw new Error(`存储空间不足`);
                         }
                         currentRequestUploadSize += stats.size;
 
-                        // 3. 上传到最终存储
-                        log('BUFFER_UPLOAD', `开始将临时文件上传到后端 (${storage.type}): ${finalFilename}`);
-                        
                         let uploadData;
                         if (stats.size < 50 * 1024 * 1024) { 
-                            log('BUFFER_STRATEGY', `文件较小 (${stats.size})，使用 Buffer 上传以确保稳定`);
                             uploadData = await fsp.readFile(tempFilePath);
                         } else {
-                            log('BUFFER_STRATEGY', `文件较大 (${stats.size})，使用 Stream 上传`);
                             uploadData = fs.createReadStream(tempFilePath);
                         }
 
-                        // --- 关键修复：使用限流器进行上传 ---
-                        // 防止并发过高导致 429 或 503
                         await uploadLimiter.run(async () => {
                              await storage.upload(uploadData, finalFilename, mimeType, userId, targetFolderId, caption || '', existingItem);
                         });
-                        
-                        log('BUFFER_SUCCESS', `后端上传成功: ${finalFilename}`);
 
                     } finally {
                         if (fs.existsSync(tempFilePath)) {
-                            await fsp.unlink(tempFilePath).catch(e => log('CLEANUP_ERR', e.message));
+                            await fsp.unlink(tempFilePath).catch(e => {});
                         }
                     }
                 } else {
-                    // --- 流式模式 (Stream) ---
-                    // Stream 模式天然受限于 HTTP Multipart 的串行特性 (Busboy 解析完一个 Part 才会触发下一个)
-                    // 因此不需要额外的并发控制
-                    log('STREAM_MODE', `启用流式上传: ${finalFilename}`);
-                    
-                    // 流式模式配额预检 (只能基于当前已用空间，无法准确预知流大小)
                     if (quota.used >= quota.max) {
                          fileStream.resume();
                          throw new Error('存储空间已满，无法上传。');
                     }
-
-                    // 直接将原始流传给 storage
                     await storage.upload(fileStream, finalFilename, mimeType, userId, targetFolderId, caption || '', existingItem);
-                    log('STREAM_SUCCESS', `上传流程结束: ${finalFilename}`);
                 }
 
                 return { skipped: false };
@@ -594,15 +504,11 @@ app.post('/upload', requireLogin, async (req, res) => {
         });
 
         busboy.on('finish', async () => {
-            log('BUSBOY_FINISH', 'Busboy 解析完成，等待所有上传任务结束...');
             try {
                 const results = await Promise.all(uploadPromises);
                 const errors = results.filter(r => r && r.error);
-                if (errors.length > 0) {
-                     // 如果有错误，取第一个错误返回给前端
-                     log('UPLOAD_FAIL', `总任务中有 ${errors.length} 个错误。第一个错误: ${errors[0].error.message}`);
-                     throw errors[0].error;
-                }
+                if (errors.length > 0) throw errors[0].error;
+                
                 const allSkipped = results.length > 0 && results.every(r => r.skipped);
                 if (allSkipped) {
                      res.json({ success: true, skippedAll: true, message: '所有文件都因冲突而被跳过' });
@@ -617,7 +523,6 @@ app.post('/upload', requireLogin, async (req, res) => {
         });
 
         busboy.on('error', (err) => {
-            log('BUSBOY_ERR', `Busboy 错误: ${err.message}`);
             req.unpipe(busboy);
             if (!res.headersSent) res.status(500).json({ success: false, message: '上传解析失败' });
         });
@@ -625,7 +530,6 @@ app.post('/upload', requireLogin, async (req, res) => {
         req.pipe(busboy);
 
     } catch (err) {
-        log('PRE_UPLOAD_ERR', err.message);
         res.status(400).json({ success: false, message: `请求失败: ${err.message}` });
     }
 });
@@ -635,15 +539,13 @@ app.post('/api/text-file', requireLogin, async (req, res) => {
     const userId = req.session.userId;
     const storage = storageManager.getStorage();
 
+    if (storage.type === 'local') return res.status(500).json({ success: false, message: '本地存储已禁用' });
     if (!fileName) return res.status(400).json({ success: false, message: '档名无效' });
 
-    // --- 确保 tempFilePath 作用域在 finally 块中可见 ---
     let tempFilePath = null; 
 
     try {
-        // 配额检查
         const byteLength = Buffer.byteLength(content, 'utf8');
-        // 如果是编辑现有文件，我们应该先扣除旧文件大小（这里简化为直接检查，如果空间极度紧张可能会导致无法保存）
         if (!await data.checkQuota(userId, byteLength)) {
             return res.status(413).json({ success: false, message: '空间不足，无法保存文件。' });
         }
@@ -665,54 +567,28 @@ app.post('/api/text-file', requireLogin, async (req, res) => {
             if (originalFile.storage_type === 'telegram') {
                 const fileStream = fs.createReadStream(tempFilePath);
                 const result = await storage.upload(fileStream, fileName, 'text/plain', userId, originalFile.folder_id);
-                // 注意：这里使用 unifiedDelete 进行物理删除旧文件
                 await data.unifiedDelete(originalFile.message_id, 'file', userId);
                 return res.json({ success: true, fileId: result.fileId });
             } else {
                 const newRelativePath = path.posix.join(path.posix.dirname(originalFile.file_id), fileName);
                 const fileStream = fs.createReadStream(tempFilePath); 
                 
-                // --- 统一处理 local/webdav/s3 的物理操作，以支持重命名和内容更新 ---
-                if (originalFile.storage_type === 'local') {
-                    const newFullPath = path.join(__dirname, 'data', 'uploads', String(userId), newRelativePath);
-                    await fsp.mkdir(path.dirname(newFullPath), { recursive: true });
-                    
-                    // 1. 复制内容到新文件
-                    await fsp.copyFile(tempFilePath, newFullPath); 
-                    
-                    // 2. 如果文件名或路径改变，删除旧文件
-                    if (originalFile.file_id !== newRelativePath && fs.existsSync(path.join(__dirname, 'data', 'uploads', String(userId), originalFile.file_id))) {
-                         await fsp.unlink(path.join(__dirname, 'data', 'uploads', String(userId), originalFile.file_id));
-                    }
-                } else if (originalFile.storage_type === 'webdav') {
+                if (originalFile.storage_type === 'webdav') {
                     const client = storage.getClient();
-                    // WebDAV 的 putFileContents 可以接受流并执行写入/覆盖
                     await client.putFileContents(newRelativePath, fileStream, { overwrite: true });
-                    
-                    // 如果文件名改变，删除旧文件
                     if (originalFile.file_id !== newRelativePath) {
                         await client.deleteFile(originalFile.file_id);
                     }
                 } else if (originalFile.storage_type === 's3') {
-                    // S3 的上传逻辑（相当于覆盖或移动+删除旧Key）
-                    const s3Storage = require('./storage/s3');
-                    const s3Client = s3Storage.getClient();
+                    const s3Client = storage.getClient();
                     const s3Config = storageManager.readConfig().s3;
-
-                    const uploadParams = {
-                        Bucket: s3Config.bucket,
-                        Key: newRelativePath,
-                        Body: fs.createReadStream(tempFilePath),
-                        ContentType: 'text/plain',
-                    };
-                    await s3Client.upload(uploadParams).promise();
-
-                    // 如果文件名改变，删除旧 Key
+                    await s3Client.putObject({
+                        Bucket: s3Config.bucket, Key: newRelativePath, Body: fs.createReadStream(tempFilePath), ContentType: 'text/plain',
+                    }).promise();
                     if (originalFile.file_id !== newRelativePath) {
                         await s3Client.deleteObject({ Bucket: s3Config.bucket, Key: originalFile.file_id }).promise();
                     }
                 }
-                // --- 统一处理结束 ---
                 
                 const stats = await fsp.stat(tempFilePath);
                 await data.updateFile(numericFileId, { fileName, size: stats.size, date: Date.now(), file_id: newRelativePath }, userId);
@@ -722,7 +598,6 @@ app.post('/api/text-file', requireLogin, async (req, res) => {
             const conflict = await data.checkFullConflict(fileName, folderId, userId);
             if (conflict) return res.status(409).json({ success: false, message: '同名冲突' });
             
-            // 使用文件流进行上传，以便适应各种存储后端
             const fileStream = fs.createReadStream(tempFilePath);
             const result = await storage.upload(fileStream, fileName, 'text/plain', userId, folderId);
             res.json({ success: true, fileId: result.fileId });
@@ -846,25 +721,19 @@ app.post('/api/folder', requireLogin, async (req, res) => {
         }
         const result = await data.createFolder(name, parentId, userId);
         const storage = storageManager.getStorage();
-        if (storage.type === 'local' || storage.type === 'webdav' || storage.type === 's3') {
+        
+        if (storage.type === 'webdav' || storage.type === 's3') {
             const newFolderPathParts = await data.getFolderPath(result.id, userId);
             const newFullPath = path.posix.join(...newFolderPathParts.slice(1).map(p => p.name));
-            if (storage.type === 'local') {
-                const newLocalPath = path.join(__dirname, 'data', 'uploads', String(userId), newFullPath);
-                await fsp.mkdir(newLocalPath, { recursive: true });
-            } else if (storage.type === 'webdav' && storage.createDirectory) {
+            if (storage.type === 'webdav' && storage.createDirectory) {
                 await storage.createDirectory(newFullPath);
             } else if (storage.type === 's3') {
-                // S3 不需要预创建目录，但我们仍然需要确保 Key 路径正确
                 const s3Storage = require('./storage/s3');
                 const s3Client = s3Storage.getClient();
                 const s3Config = storageManager.readConfig().s3;
                 const key = path.posix.join(`user_${userId}`, newFullPath, '/').replace(/\\/g, '/').replace(/^\//, '');
-
                 await s3Client.putObject({
-                    Bucket: s3Config.bucket,
-                    Key: key,
-                    Body: '',
+                    Bucket: s3Config.bucket, Key: key, Body: '',
                 }).promise();
             }
         }
@@ -993,20 +862,16 @@ app.post('/api/move', requireLogin, async (req, res) => {
     }
 });
 
-// --- 修改：删除接口 (支持软删除和永久删除) ---
 app.post('/delete-multiple', requireLogin, async (req, res) => {
     const { messageIds = [], folderIds = [], force = false } = req.body;
     const userId = req.session.userId;
     try {
         if (force) {
-            // 永久删除
             const fileIdBigInts = messageIds.map(id => BigInt(id));
             const folderIdInts = folderIds.map(id => parseInt(id, 10));
-            
             await data.unifiedDelete(null, null, userId, fileIdBigInts, folderIdInts);
             res.json({ success: true, message: '已永久删除' });
         } else {
-            // 软删除
             await data.softDeleteItems(messageIds, folderIds, userId);
             res.json({ success: true, message: '已移至回收站' });
         }
@@ -1015,8 +880,7 @@ app.post('/delete-multiple', requireLogin, async (req, res) => {
     }
 });
 
-// --- 新增：回收站相关路由 ---
-
+// --- 回收站相关路由 ---
 app.get('/api/trash', requireLogin, async (req, res) => {
     try {
         const contents = await data.getTrashContents(req.session.userId);
@@ -1039,14 +903,13 @@ app.post('/api/restore', requireLogin, async (req, res) => {
 
 app.post('/api/trash/empty', requireLogin, async (req, res) => {
     try {
-        await data.cleanupTrash(0); // 0 天意味着清理所有回收站项目
+        await data.cleanupTrash(0); 
         res.json({ success: true, message: '回收站已清空' });
     } catch (error) {
         res.status(500).json({ success: false, message: '清空失败: ' + error.message });
     }
 });
 
-// --- 新增：获取用户配额 ---
 app.get('/api/user/quota', requireLogin, async (req, res) => {
     try {
         const quota = await data.getUserQuota(req.session.userId);
@@ -1103,8 +966,7 @@ async function handleFileStream(req, res, fileInfo) {
     const range = req.headers.range;
     const totalSize = fileInfo.size;
     
-    // 如果是 S3 或 local 存储，我们可以直接流式传输
-    if (fileInfo.storage_type === 'local' || fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
+    if (fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
         try {
             res.setHeader('Accept-Ranges', 'bytes');
             res.setHeader('Content-Type', fileInfo.mimetype || 'application/octet-stream');
@@ -1138,12 +1000,11 @@ async function handleFileStream(req, res, fileInfo) {
             });
             
         } catch (error) {
-            console.error('Error handling local/webdav/s3 stream:', error);
+            console.error('Error handling stream:', error);
             if (!res.headersSent) res.status(500).send('无法获取文件流');
         }
 
     } else if (fileInfo.storage_type === 'telegram') {
-        // Telegram 必须先获取 URL，然后通过 axios 代理或重定向
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('Content-Type', fileInfo.mimetype || 'application/octet-stream');
         res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(fileInfo.fileName)}`);
@@ -1219,7 +1080,7 @@ app.get('/file/content/:message_id', requireLogin, async (req, res) => {
         const storage = storageManager.getStorage();
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         
-        if (fileInfo.storage_type === 'local' || fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
+        if (fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
             const stream = await storage.stream(fileInfo.file_id, fileInfo.user_id);
             stream.pipe(res);
             stream.on('error', (err) => {
@@ -1290,7 +1151,7 @@ app.post('/api/download-archive', requireLogin, async (req, res) => {
 
         const processFile = async (file) => {
             try {
-                if (file.storage_type === 'local' || file.storage_type === 'webdav' || file.storage_type === 's3') {
+                if (file.storage_type === 'webdav' || file.storage_type === 's3') {
                     const stream = await storage.stream(file.file_id, userId);
                     await new Promise((resolve, reject) => {
                         stream.on('end', resolve);
@@ -1468,18 +1329,20 @@ app.get('/api/admin/storage-mode', requireAdmin, (req, res) => {
     });
 });
 
-app.post('/api/admin/storage-mode', requireAdmin, (req, res) => {
+app.post('/api/admin/storage-mode', requireAdmin, async (req, res) => {
     const { mode } = req.body;
-    if (storageManager.setStorageMode(mode)) {
+    if (mode === 'local') return res.status(400).json({ success: false, message: '本地存储已禁用' });
+
+    if (await storageManager.setStorageMode(mode)) {
         res.json({ success: true, message: '储存模式已设定。' });
     } else {
         res.status(400).json({ success: false, message: '无效的模式' });
     }
 });
 
-app.post('/api/admin/upload-mode', requireAdmin, (req, res) => {
+app.post('/api/admin/upload-mode', requireAdmin, async (req, res) => {
     const { mode } = req.body;
-    if (storageManager.setUploadMode(mode)) {
+    if (await storageManager.setUploadMode(mode)) {
         res.json({ success: true, message: '上传模式已设定。' });
     } else {
         res.status(400).json({ success: false, message: '无效的上传模式' });
@@ -1504,7 +1367,6 @@ app.get('/api/admin/all-users', requireAdmin, async (req, res) => {
     }
 });
 
-// --- 新增：获取所有使用者及其配额信息 (Admin) ---
 app.get('/api/admin/users-with-quota', requireAdmin, async (req, res) => {
     try {
         const users = await data.listAllUsersWithQuota();
@@ -1514,15 +1376,12 @@ app.get('/api/admin/users-with-quota', requireAdmin, async (req, res) => {
     }
 });
 
-// --- 新增：设定使用者配额 (Admin) ---
 app.post('/api/admin/set-quota', requireAdmin, async (req, res) => {
     const { userId, maxBytes } = req.body;
     let maxBytesInt = parseInt(maxBytes, 10);
     const userIdInt = parseInt(userId, 10);
 
-    // 检查是否为有效的数字
     if (isNaN(userIdInt) || isNaN(maxBytesInt) || maxBytesInt < 0) {
-        // 如果传入的是 0 (表示无限)，则接受
         if (req.body.maxBytes === '0' || req.body.maxBytes === 0) {
              maxBytesInt = 0;
         } else {
@@ -1551,7 +1410,6 @@ app.post('/api/admin/add-user', requireAdmin, async (req, res) => {
         const hashedPassword = await bcrypt.hash(password, salt);
         const newUser = await data.createUser(username, hashedPassword);
         await data.createFolder('/', null, newUser.id);
-        await fsp.mkdir(path.join(__dirname, 'data', 'uploads', String(newUser.id)), { recursive: true });
         res.json({ success: true, user: newUser });
     } catch (error) {
         res.status(500).json({ success: false, message: '建立使用者失败，可能使用者名称已被使用。' });
@@ -1592,57 +1450,50 @@ app.get('/api/admin/webdav', requireAdmin, (req, res) => {
     res.json(webdavConfig.url ? [{ id: 1, ...webdavConfig }] : []);
 });
 
-app.post('/api/admin/webdav', requireAdmin, (req, res) => {
+app.post('/api/admin/webdav', requireAdmin, async (req, res) => {
     const { url, username, password } = req.body;
     if (!url || !username) {
         return res.status(400).json({ success: false, message: '缺少必要参数' });
     }
     const config = storageManager.readConfig();
-    
-    // 获取旧配置中的密码（如果存在）
     const oldPassword = (config.webdav && config.webdav.password) ? config.webdav.password : '';
     
     config.webdav = { 
         url, 
         username,
-        // 如果前端传来了新密码则使用新密码，否则保留旧密码
         password: password ? password : oldPassword
     };
     
-    if (storageManager.writeConfig(config)) {
+    if (await storageManager.writeConfig(config)) {
         res.json({ success: true, message: 'WebDAV 设定已储存' });
     } else {
         res.status(500).json({ success: false, message: '写入设定失败' });
     }
 });
 
-app.delete('/api/admin/webdav/:id', requireAdmin, (req, res) => {
+app.delete('/api/admin/webdav/:id', requireAdmin, async (req, res) => {
     const config = storageManager.readConfig();
     config.webdav = {};
-    if (storageManager.writeConfig(config)) {
+    if (await storageManager.writeConfig(config)) {
         res.json({ success: true, message: 'WebDAV 设定已删除' });
     } else {
         res.status(500).json({ success: false, message: '删除设定失败' });
     }
 });
 
-// --- 新增：S3 配置路由 (Admin) ---
 app.get('/api/admin/s3', requireAdmin, (req, res) => {
     const config = storageManager.readConfig();
     const s3Config = config.s3 || {};
-    // 隐藏秘密密钥，只返回其他配置
     const { secretAccessKey, ...safeConfig } = s3Config;
     res.json({ success: true, s3: safeConfig });
 });
 
-app.post('/api/admin/s3', requireAdmin, (req, res) => {
+app.post('/api/admin/s3', requireAdmin, async (req, res) => {
     const { endpoint, region, bucket, accessKeyId, secretAccessKey } = req.body;
     if (!region || !bucket || !accessKeyId) {
         return res.status(400).json({ success: false, message: '缺少必要的 S3 参数 (Region, Bucket, Access Key ID)' });
     }
     const config = storageManager.readConfig();
-    
-    // 保留旧配置中的秘密密钥（如果未提供新密码）
     const oldSecretKey = (config.s3 && config.s3.secretAccessKey) ? config.s3.secretAccessKey : '';
     
     config.s3 = {
@@ -1650,17 +1501,15 @@ app.post('/api/admin/s3', requireAdmin, (req, res) => {
         region,
         bucket,
         accessKeyId,
-        // 如果提供了新密钥，则使用新密钥，否则保留旧密钥
         secretAccessKey: secretAccessKey || oldSecretKey 
     };
     
-    if (storageManager.writeConfig(config)) {
+    if (await storageManager.writeConfig(config)) {
         res.json({ success: true, message: 'S3 存储配置已储存' });
     } else {
         res.status(500).json({ success: false, message: '写入配置失败' });
     }
 });
-// --- 新增 S3 配置路由结束 ---
 
 
 app.get('/share/auth/:itemType/:token', shareSession, (req, res) => {
@@ -1705,15 +1554,13 @@ app.get('/share/view/file/:token', shareSession, async (req, res) => {
             let textContent = null;
             if (fileInfo.mimetype && fileInfo.mimetype.startsWith('text/')) {
                 const storage = storageManager.getStorage();
-                if (fileInfo.storage_type === 'local' || fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
-                    // 使用 stream，并等待其结束以获取完整内容
+                if (fileInfo.storage_type === 'webdav' || fileInfo.storage_type === 's3') {
                     const stream = await storage.stream(fileInfo.file_id, fileInfo.user_id);
                      textContent = await new Promise((resolve, reject) => {
                         let data = '';
                         stream.on('data', chunk => data += chunk);
                         stream.on('end', () => resolve(data));
                         stream.on('error', err => reject(err));
-                        // 确保流不会被卡住
                         stream.on('close', () => resolve(data));
                     });
                 } else if (fileInfo.storage_type === 'telegram') {
@@ -1829,6 +1676,10 @@ app.get('/share/download/:folderToken/:fileId', shareSession, async (req, res) =
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`✅ 伺服器已在 http://localhost:${PORT} 上运行`);
-});
+// 启动服务器
+(async () => {
+    await storageManager.init();
+    app.listen(PORT, () => {
+        console.log(`✅ 伺服器已在 http://localhost:${PORT} 上运行`);
+    });
+})();
