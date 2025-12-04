@@ -1,21 +1,21 @@
 // src/config.js
 
-// 定義在 KV 中存儲配置的鍵名
+// 定义在 KV 中存储配置的键名
 const CONFIG_KEY = 'system_config';
 
 export default class ConfigManager {
     /**
-     * @param {KVNamespace} kv - Cloudflare KV 綁定對象
+     * @param {KVNamespace} kv - Cloudflare KV 绑定对象
      */
     constructor(kv) {
         this.kv = kv;
-        // 簡單的內存緩存，減少 KV 讀取費用 (Cloudflare Workers 實例重啟前有效)
+        // 简单的内存缓存，减少 KV 读取费用 (Cloudflare Workers 实例重启前有效)
         this.cachedConfig = null;
     }
 
     /**
-     * 加載配置
-     * 優先從內存獲取，否則從 KV 讀取並合併默認值
+     * 加载配置
+     * 优先从内存获取，否则从 KV 读取并合并默认值
      */
     async load() {
         if (this.cachedConfig) {
@@ -23,27 +23,27 @@ export default class ConfigManager {
         }
 
         try {
-            // 從 KV 獲取配置，指定類型為 json
+            // 从 KV 获取配置，指定类型为 json
             const data = await this.kv.get(CONFIG_KEY, 'json');
             
-            // 默認配置結構
+            // 默认配置结构
             const defaults = {
-                storageMode: 'telegram', // 默認存儲模式
-                uploadMode: 'stream',    // Workers 強制使用流式上傳
-                webdav: {},              // WebDAV 配置對象
-                s3: {}                   // S3 配置對象
+                storageMode: 'telegram', // 默认存储模式
+                uploadMode: 'stream',    // Workers 强制使用流式上传
+                webdav: {},              // WebDAV 配置对象
+                s3: {}                   // S3 配置对象
             };
 
-            // 合併配置：默認值 < KV數據
+            // 合并配置：默认值 < KV数据
             this.cachedConfig = { ...defaults, ...(data || {}) };
             
-            // 強制覆蓋 uploadMode，因為 Workers 不支持本地磁盤緩衝
+            // 强制覆盖 uploadMode，因为 Workers 不支持本地磁盘缓冲
             this.cachedConfig.uploadMode = 'stream';
 
             return this.cachedConfig;
         } catch (error) {
-            console.error('加載配置失敗:', error);
-            // 發生錯誤時返回安全默認值
+            console.error('加载配置失败:', error);
+            // 发生错误时返回安全默认值
             return {
                 storageMode: 'telegram',
                 uploadMode: 'stream',
@@ -59,21 +59,21 @@ export default class ConfigManager {
      */
     async save(newConfig) {
         try {
-            // 先獲取當前完整配置
+            // 先获取当前完整配置
             const current = await this.load();
             
-            // 合併新舊配置
+            // 合并新旧配置
             const merged = { ...current, ...newConfig };
             
-            // 寫入 KV
+            // 写入 KV
             await this.kv.put(CONFIG_KEY, JSON.stringify(merged));
             
-            // 更新內存緩存
+            // 更新内存缓存
             this.cachedConfig = merged;
             
             return true;
         } catch (error) {
-            console.error('保存配置失敗:', error);
+            console.error('保存配置失败:', error);
             return false;
         }
     }
