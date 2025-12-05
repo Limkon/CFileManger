@@ -1,5 +1,3 @@
-// public/manager.js
-
 document.addEventListener('DOMContentLoaded', () => {
     // 1. 状态变量与配置
     let currentFolderId = null; 
@@ -9,6 +7,12 @@ document.addEventListener('DOMContentLoaded', () => {
     let isMultiSelectMode = false; 
     let viewMode = localStorage.getItem('viewMode') || 'grid'; 
     let isTrashMode = false;
+
+    // 冲突处理状态
+    let conflictResolutionState = {
+        applyToAll: false,
+        choice: null // 'rename', 'overwrite', 'skip'
+    };
 
     // 2. DOM 元素引用
     const itemGrid = document.getElementById('itemGrid');
@@ -58,7 +62,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const deleteForeverBtn = document.getElementById('deleteForeverBtn'); 
     const dropZoneOverlay = document.getElementById('dropZoneOverlay');
 
-    // Move Modal
+    // 移动模态框
     const moveModal = document.getElementById('moveModal');
     const moveBtn = document.getElementById('moveBtn');
     const folderTree = document.getElementById('folderTree');
@@ -66,7 +70,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cancelMoveBtn = document.getElementById('cancelMoveBtn');
     let selectedMoveTargetId = null;
 
-    // Share Modal
+    // 分享模态框
     const shareModal = document.getElementById('shareModal');
     const shareBtn = document.getElementById('shareBtn');
     const confirmShareBtn = document.getElementById('confirmShareBtn');
@@ -80,10 +84,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const shareLinkContainer = document.getElementById('shareLinkContainer');
     const copyLinkBtn = document.getElementById('copyLinkBtn');
 
-    // Preview Modal
+    // 预览模态框
     const previewModal = document.getElementById('previewModal');
     const modalContent = document.getElementById('modalContent');
     const closePreviewBtn = document.querySelector('#previewModal .close-button');
+
+    // 冲突解决模态框
+    const conflictModal = document.getElementById('conflictModal');
+    const conflictMessage = document.getElementById('conflictMessage');
+    const applyToAllCheckbox = document.getElementById('applyToAllCheckbox');
+    const conflictRenameBtn = document.getElementById('conflictRenameBtn');
+    const conflictOverwriteBtn = document.getElementById('conflictOverwriteBtn');
+    const conflictSkipBtn = document.getElementById('conflictSkipBtn');
+    const conflictCancelBtn = document.getElementById('conflictCancelBtn');
 
     // =================================================================================
     // 状态栏管理器
@@ -550,7 +563,38 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 移动功能逻辑 (Move)
+    // 冲突解决工具函数
+    // =================================================================================
+    function showConflictModal(fileName) {
+        return new Promise((resolve) => {
+            conflictMessage.textContent = `目标位置已存在文件: "${fileName}"`;
+            conflictModal.style.display = 'block';
+            applyToAllCheckbox.checked = false; // 默认不勾选
+
+            // 清理监听器
+            const cleanup = () => {
+                conflictModal.style.display = 'none';
+                conflictRenameBtn.onclick = null;
+                conflictOverwriteBtn.onclick = null;
+                conflictSkipBtn.onclick = null;
+                conflictCancelBtn.onclick = null;
+            };
+
+            const handleChoice = (choice) => {
+                const applyToAll = applyToAllCheckbox.checked;
+                cleanup();
+                resolve({ choice, applyToAll });
+            };
+
+            conflictRenameBtn.onclick = () => handleChoice('rename');
+            conflictOverwriteBtn.onclick = () => handleChoice('overwrite');
+            conflictSkipBtn.onclick = () => handleChoice('skip');
+            conflictCancelBtn.onclick = () => handleChoice('cancel');
+        });
+    }
+
+    // =================================================================================
+    // 移动功能逻辑 (Move) - 增强版：带验重
     // =================================================================================
     if (moveBtn) {
         moveBtn.addEventListener('click', () => {
@@ -576,12 +620,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderFolderTree(folders) {
-        // 找出要移动的文件夹ID (为了避免移动到自己或子文件夹)
         const movingFolderIds = new Set();
         selectedItems.forEach(itemStr => {
             const [type, id] = parseItemId(itemStr);
             if (type === 'folder') {
-                // 这里的 id 是加密 ID，API 返回的也是带 encrypted_id
                 const matched = folders.find(f => f.encrypted_id === id || f.id == id);
                 if(matched) movingFolderIds.add(matched.id);
             }
@@ -656,19 +698,58 @@ document.addEventListener('DOMContentLoaded', () => {
 
     confirmMoveBtn.addEventListener('click', async () => {
         if (!selectedMoveTargetId) return;
+        
         const files = []; const folders = [];
+        const fileNames = []; // 用于本地验重检查
         selectedItems.forEach(id => { 
             const [type, realId] = parseItemId(id); 
-            if (type === 'file') files.push(realId); 
-            else folders.push(realId); 
+            // 找到原始对象以获取名称
+            const originalItem = items.find(i => getItemId(i) === id);
+            if (originalItem) {
+                if (type === 'file') {
+                    files.push(realId);
+                    fileNames.push(originalItem.name);
+                } else {
+                    folders.push(realId);
+                }
+            }
         });
         
         try {
-            confirmMoveBtn.textContent = '移动中...';
+            // 验重逻辑：先获取目标文件夹内容
+            confirmMoveBtn.textContent = '正在检查冲突...';
             confirmMoveBtn.disabled = true;
+            
+            const targetRes = await axios.get(`/api/folder/${selectedMoveTargetId}`);
+            const targetContents = targetRes.data.contents;
+            const targetFileNames = new Set(targetContents.files.map(f => f.fileName));
+            
+            // 检查是否有冲突
+            const conflicts = fileNames.filter(name => targetFileNames.has(name));
+            
+            let conflictMode = 'rename'; // 默认
+            
+            if (conflicts.length > 0) {
+                // 如果有冲突，询问用户（一次性询问）
+                const result = await showConflictModal(`检测到 ${conflicts.length} 个同名文件 (例如: ${conflicts[0]})`);
+                if (result.choice === 'cancel') {
+                    confirmMoveBtn.textContent = '确定移动';
+                    confirmMoveBtn.disabled = false;
+                    moveModal.style.display = 'none';
+                    return;
+                }
+                conflictMode = result.choice;
+            }
+
+            confirmMoveBtn.textContent = '移动中...';
             TaskManager.show('正在移动...', 'fas fa-arrows-alt'); 
             
-            await axios.post('/api/move', { files, folders, targetFolderId: selectedMoveTargetId });
+            await axios.post('/api/move', { 
+                files, 
+                folders, 
+                targetFolderId: selectedMoveTargetId,
+                conflictMode: conflictMode 
+            });
             
             TaskManager.success('移动完成');
             moveModal.style.display = 'none';
@@ -709,7 +790,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     confirmShareBtn.addEventListener('click', async () => {
         const itemStr = Array.from(selectedItems)[0];
-        const [type, id] = parseItemId(itemStr); // id is raw ID / message_id
+        const [type, id] = parseItemId(itemStr); 
         const password = sharePasswordInput.value;
         const expiresIn = expiresInSelect.value;
         
@@ -852,7 +933,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // =================================================================================
-    // 上传功能 (增强版：支持递归目录创建 + 状态栏)
+    // 上传功能 (增强版：支持递归目录 + 验重)
     // =================================================================================
 
     async function getFolderContents(encryptedId) {
@@ -970,7 +1051,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (queue.length === 0) return;
 
-        // 初始化 UI (显示模态框)
+        // 初始化 UI
         if(uploadModal.style.display === 'none') {
             uploadModal.style.display = 'block';
             document.getElementById('uploadForm').style.display = 'none';
@@ -986,8 +1067,11 @@ document.addEventListener('DOMContentLoaded', () => {
             progressArea.appendChild(statusText);
         }
         
-        // 激活底部状态栏
         TaskManager.show('准备上传...', 'fas fa-cloud-upload-alt');
+
+        // 重置冲突状态
+        conflictResolutionState.applyToAll = false;
+        conflictResolutionState.choice = null;
 
         const totalBytes = queue.reduce((acc, item) => acc + item.file.size, 0);
         let loadedBytesGlobal = 0;
@@ -1003,32 +1087,53 @@ document.addEventListener('DOMContentLoaded', () => {
             const relPath = item.path || '';
             
             let targetFolderId = rootId;
-            
-            // 状态栏更新：当前文件
             const statusMsg = `[${i + 1}/${queue.length}] 上传: ${file.name}`;
             statusText.textContent = statusMsg;
             TaskManager.show(statusMsg, 'fas fa-file-upload');
 
             try {
+                // 1. 确保目录存在
                 if (pathCache[relPath]) {
                     targetFolderId = pathCache[relPath];
                 } else {
                     targetFolderId = await ensureRemotePath(relPath, rootId);
                     pathCache[relPath] = targetFolderId;
                 }
-            } catch (e) {
-                console.error(`无法创建目录: ${relPath}`, e);
-                failCount++;
-                errors.push(`目录创建失败: ${relPath}`);
-                continue;
-            }
 
-            const formData = new FormData();
-            formData.append('files', file, file.name);
+                // 2. 验重逻辑
+                const contents = await getFolderContents(targetFolderId);
+                const existingFile = contents.files.find(f => f.fileName === file.name);
+                let conflictMode = 'rename'; // 默认
 
-            try {
+                if (existingFile) {
+                    if (conflictResolutionState.applyToAll && conflictResolutionState.choice) {
+                        conflictMode = conflictResolutionState.choice;
+                    } else {
+                        // 弹出模态框
+                        const result = await showConflictModal(file.name);
+                        conflictMode = result.choice;
+                        if (result.applyToAll) {
+                            conflictResolutionState.applyToAll = true;
+                            conflictResolutionState.choice = conflictMode;
+                        }
+                    }
+
+                    if (conflictMode === 'cancel') {
+                        failCount += (queue.length - i);
+                        errors.push('用户取消操作');
+                        break; 
+                    }
+                    if (conflictMode === 'skip') {
+                        continue; 
+                    }
+                }
+
+                // 3. 执行上传
+                const formData = new FormData();
+                formData.append('files', file, file.name);
+
                 let currentFileLoaded = 0;
-                await axios.post(`/upload?folderId=${targetFolderId || ''}`, formData, {
+                await axios.post(`/upload?folderId=${targetFolderId || ''}&conflictMode=${conflictMode}`, formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                     onUploadProgress: (p) => {
                         const diff = p.loaded - currentFileLoaded;
@@ -1038,7 +1143,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             const percent = Math.min(100, Math.round((loadedBytesGlobal * 100) / totalBytes));
                             progressBar.style.width = percent + '%';
                             progressBar.textContent = percent + '%';
-                            TaskManager.update(percent, statusMsg); // 同步更新底部状态栏
+                            TaskManager.update(percent, statusMsg); 
                         }
                     }
                 });
@@ -1149,4 +1254,3 @@ document.addEventListener('DOMContentLoaded', () => {
     function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]); }
     function formatSize(bytes) { if (bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; }
 });
-
