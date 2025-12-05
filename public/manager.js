@@ -1,3 +1,5 @@
+// public/manager.js - 完整修复版 (修复 getIconClass 未定义问题)
+
 document.addEventListener('DOMContentLoaded', () => {
     // =================================================================================
     // 1. 状态变量与配置
@@ -17,7 +19,55 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // =================================================================================
-    // 2. DOM 元素引用
+    // 2. 基础辅助函数 (移至顶部确保优先定义)
+    // =================================================================================
+    
+    // 获取项目 ID
+    function getItemId(item) { 
+        return item.type === 'file' ? `file:${item.message_id}` : `folder:${item.id}`; 
+    }
+
+    // 解析项目 ID
+    function parseItemId(str) { 
+        const p = str.split(':'); 
+        return [p[0], p[1]]; 
+    }
+
+    // HTML 转义防止 XSS
+    function escapeHtml(text) { 
+        if (!text) return ''; 
+        return text.replace(/[&<>"']/g, m => ({ 
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' 
+        })[m]); 
+    }
+
+    // 格式化文件大小
+    function formatSize(bytes) { 
+        if (bytes === 0) return '0 B'; 
+        const k = 1024; 
+        const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; 
+        const i = Math.floor(Math.log(bytes) / Math.log(k)); 
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; 
+    }
+    
+    // 获取文件图标样式
+    function getIconClass(item) {
+        if (item.type === 'folder') return 'fas fa-folder';
+        // 安全检查：防止 name 为 undefined
+        const name = item.name || ''; 
+        const ext = name.split('.').pop().toLowerCase();
+        
+        if (['jpg','jpeg','png','gif','bmp','webp'].includes(ext)) return 'fas fa-file-image';
+        if (['mp4','mov','avi','mkv','webm'].includes(ext)) return 'fas fa-file-video';
+        if (['mp3','wav','ogg','flac'].includes(ext)) return 'fas fa-file-audio';
+        if (['pdf'].includes(ext)) return 'fas fa-file-pdf';
+        if (['zip','rar','7z','tar','gz'].includes(ext)) return 'fas fa-file-archive';
+        if (['txt','md','js','html','css','json','py','java','c','cpp','h','xml','log','ini'].includes(ext)) return 'fas fa-file-alt';
+        return 'fas fa-file';
+    }
+
+    // =================================================================================
+    // 3. DOM 元素引用
     // =================================================================================
     const itemGrid = document.getElementById('itemGrid');
     const itemListView = document.getElementById('itemListView');
@@ -115,7 +165,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const conflictCancelBtn = document.getElementById('conflictCancelBtn');
 
     // =================================================================================
-    // 3. 状态栏管理器
+    // 4. 状态栏管理器
     // =================================================================================
     const TaskManager = {
         timer: null,
@@ -156,7 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // =================================================================================
-    // 4. 初始化与核心数据加载
+    // 5. 初始化与核心数据加载
     // =================================================================================
     
     // 初始化路径
@@ -263,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =================================================================================
-    // 5. 渲染逻辑
+    // 6. 渲染逻辑
     // =================================================================================
     
     function renderBreadcrumb() {
@@ -309,7 +359,8 @@ document.addEventListener('DOMContentLoaded', () => {
         div.oncontextmenu = (e) => handleContextMenu(e, item);
         div.ondblclick = () => handleItemDblClick(item);
 
-        const iconClass = getIconClass(item); // 之前报错的原因，现在函数已补全
+        // 现在 getIconClass 在顶部定义，绝对可以访问
+        const iconClass = getIconClass(item); 
         const iconColor = item.type === 'folder' ? '#fbc02d' : '#007bff';
 
         div.innerHTML = `
@@ -330,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
         div.oncontextmenu = (e) => handleContextMenu(e, item);
         div.ondblclick = () => handleItemDblClick(item);
 
-        const iconClass = getIconClass(item); // 之前报错的原因，现在函数已补全
+        const iconClass = getIconClass(item); 
         const dateStr = item.date ? new Date(item.date).toLocaleString() : (item.deleted_at ? new Date(item.deleted_at).toLocaleString() : '-');
         const sizeStr = item.size !== undefined ? formatSize(item.size) : '-';
 
@@ -345,7 +396,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =================================================================================
-    // 6. 交互事件处理
+    // 7. 交互事件处理
     // =================================================================================
     
     function handleItemClick(e, item, el) {
@@ -407,6 +458,8 @@ document.addEventListener('DOMContentLoaded', () => {
         document.addEventListener('click', () => contextMenu.style.display = 'none', { once: true });
     }
 
+    function handleContextMenu(e, item) { /* placeholder if needed specifically */ }
+
     function updateContextMenuState(hasSelection) {
         const count = selectedItems.size;
         const isSingle = count === 1;
@@ -463,7 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =================================================================================
-    // 7. 功能按钮逻辑 (删除/还原/新建/搜索等)
+    // 8. 功能按钮逻辑 (删除/还原/新建/搜索等)
     // =================================================================================
     
     trashBtn.addEventListener('click', loadTrash);
@@ -671,7 +724,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 8. 冲突解决辅助函数
+    // 9. 冲突解决辅助函数
     // =================================================================================
     function showConflictModal(fileName) {
         return new Promise((resolve) => {
@@ -701,7 +754,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // =================================================================================
-    // 9. 移动功能 (支持冲突处理)
+    // 10. 移动功能 (支持冲突处理)
     // =================================================================================
     if (moveBtn) {
         moveBtn.addEventListener('click', () => {
@@ -847,7 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 10. 分享功能逻辑
+    // 11. 分享功能逻辑
     // =================================================================================
     if (shareBtn) {
         shareBtn.addEventListener('click', () => {
@@ -913,7 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 11. 上传功能 (递归 + 验重)
+    // 12. 上传功能 (递归 + 验重)
     // =================================================================================
 
     async function getFolderContentsForUpload(encryptedId) {
@@ -1191,26 +1244,5 @@ document.addEventListener('DOMContentLoaded', () => {
                 folderSelect.appendChild(op);
             }
         });
-    }
-
-    // =================================================================================
-    // 12. 辅助函数 (ID, 转义, 格式化, 图标)
-    // =================================================================================
-    function getItemId(item) { return item.type === 'file' ? `file:${item.message_id}` : `folder:${item.id}`; }
-    function parseItemId(str) { const p = str.split(':'); return [p[0], p[1]]; }
-    function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]); }
-    function formatSize(bytes) { if (bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; }
-    
-    // 获取文件图标 (已补全)
-    function getIconClass(item) {
-        if (item.type === 'folder') return 'fas fa-folder';
-        const ext = item.name.split('.').pop().toLowerCase();
-        if (['jpg','jpeg','png','gif','bmp','webp'].includes(ext)) return 'fas fa-file-image';
-        if (['mp4','mov','avi','mkv','webm'].includes(ext)) return 'fas fa-file-video';
-        if (['mp3','wav','ogg','flac'].includes(ext)) return 'fas fa-file-audio';
-        if (['pdf'].includes(ext)) return 'fas fa-file-pdf';
-        if (['zip','rar','7z','tar','gz'].includes(ext)) return 'fas fa-file-archive';
-        if (['txt','md','js','html','css','json','py','java'].includes(ext)) return 'fas fa-file-alt';
-        return 'fas fa-file';
     }
 });
