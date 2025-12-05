@@ -21,13 +21,13 @@ const app = new Hono();
 app.use('/*', serveStatic({ root: './', manifest }));
 
 // 2. 特定頁面路由重寫
-// 當用戶訪問 /login 時，返回 login.html 的內容
+// 確保訪問這些路徑時能正確返回對應的 HTML 文件
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
 app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
 app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 
-// 當用戶訪問 /view/xxx 時，返回 manager.html (前端路由)
+// 當用戶訪問 /view/xxx 時，返回 manager.html (前端單頁應用)
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
 
@@ -66,7 +66,7 @@ const authMiddleware = async (c, next) => {
         '/login', 
         '/register', 
         '/setup', 
-        '/fix-root', // 根目錄修復工具
+        '/fix-root',
         '/api/public', 
         '/share/view', 
         '/share/download', 
@@ -367,44 +367,45 @@ app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 // 5. 核心業務路由
 // =================================================================================
 
-// 根目錄修復工具 (解決 view/null 問題)
-app.get('/fix-root', async (c) => {
-    const db = c.get('db');
-    const user = c.get('user');
-    
-    // 1. 查找所有可能是根目錄的記錄
-    const roots = await db.all("SELECT * FROM folders WHERE parent_id IS NULL AND user_id = ?", [user.id]);
-    
-    let report = `Found ${roots.length} root folders.\n`;
-    
-    // 2. 如果存在多個或異常，清理它們
-    if (roots.length > 0) {
-        for (const root of roots) {
-            report += `Delete bad root ID: ${root.id}, Name: ${root.name}\n`;
-            // 物理刪除錯誤的根目錄記錄
-            await db.run("DELETE FROM folders WHERE id = ?", [root.id]);
-        }
-    }
-    
-    // 3. 重新創建一個全新的根目錄
-    const res = await data.createFolder(db, '/', null, user.id);
-    
-    // 再次確認
-    const verify = await data.getRootFolder(db, user.id);
-    
-    return c.text(`${report}\nNew Root Created: ID=${res.id}\nVerify DB: ID=${verify?.id}\n\nSuccess! Now try visiting the homepage.`);
-});
-
+// 根目錄自動修復路由
+// 如果用戶訪問首頁時數據庫中的根目錄丟失或 ID 為空，這裡會自動修復
 app.get('/', async (c) => {
     const db = c.get('db');
     const user = c.get('user');
+    
+    // 1. 嘗試獲取根目錄
     let root = await data.getRootFolder(db, user.id);
-    if (!root) {
-        const res = await data.createFolder(db, '/', null, user.id);
-        root = { id: res.id };
+    
+    // 2. 自動修復邏輯：如果根目錄不存在，或者 ID 是無效的（壞數據）
+    if (!root || !root.id) {
+        console.log(`[Auto-Fix] Root folder for user ${user.id} is missing or invalid. Fixing...`);
+        
+        // 物理刪除可能存在的壞記錄
+        await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
+        
+        // 重新創建一個全新的根目錄
+        await data.createFolder(db, '/', null, user.id);
+        
+        // 再次查詢確認
+        root = await data.getRootFolder(db, user.id);
     }
-    return c.redirect(`/view/${encrypt(root.id)}`);
+    
+    // 3. 安全檢查
+    if (!root || !root.id) {
+        return c.text(`❌ 嚴重錯誤: 無法創建或獲取根目錄。\nUser ID: ${user.id}\n請檢查數據庫連接。`, 500);
+    }
+    
+    // 4. 正常跳轉
+    const encryptedId = encrypt(root.id);
+    if (!encryptedId) {
+        return c.text(`❌ 加密失敗: Root ID (${root.id}) 無法加密。請檢查 SESSION_SECRET 配置。`, 500);
+    }
+    
+    return c.redirect(`/view/${encryptedId}`);
 });
+
+// 手動修復接口 (備用)
+app.get('/fix-root', async (c) => c.redirect('/'));
 
 // 獲取文件夾內容
 app.get('/api/folder/:encryptedId', async (c) => {
@@ -419,7 +420,7 @@ app.get('/api/folder/:encryptedId', async (c) => {
     } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 獲取所有文件夾
+// 獲取所有文件夾 (用於移動功能)
 app.get('/api/folders', async (c) => {
     try { return c.json(await data.getAllFolders(c.get('db'), c.get('user').id)); } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
@@ -429,6 +430,8 @@ app.post('/upload', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user'); const config = c.get('config');
     const body = await c.req.parseBody(); 
     const folderId = parseInt(decrypt(c.req.query('folderId')));
+    
+    // ID 校驗
     if (isNaN(folderId)) return c.json({ success: false, message: '缺少或無效的 folderId' }, 400);
 
     const files = [];
@@ -472,7 +475,7 @@ app.get('/download/proxy/:messageId', async (c) => {
 });
 
 // =================================================================================
-// 6. 其他 API
+// 6. 其他業務 API (配額、創建、刪除、重命名、搜索、編輯、分享、加密、回收站)
 // =================================================================================
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
 app.post('/api/folder/create', async (c) => {
@@ -535,7 +538,9 @@ app.post('/api/folder/lock', async (c) => {
     return c.json({success:true});
 });
 
-// Admin
+// =================================================================================
+// 7. 管理員路由
+// =================================================================================
 app.get('/api/admin/users', adminMiddleware, async (c) => c.json(await data.listAllUsers(c.get('db'))));
 app.get('/api/admin/users-with-quota', adminMiddleware, async (c) => c.json({users: await data.listAllUsersWithQuota(c.get('db'))}));
 app.post('/api/admin/storage-mode', adminMiddleware, async (c) => {
