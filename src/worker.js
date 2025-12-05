@@ -12,11 +12,10 @@ import { initCrypto, encrypt, decrypt } from './crypto.js';
 const app = new Hono();
 
 // =================================================================================
-// 全局错误处理
+// 0. 全局错误处理 (带详细堆栈打印)
 // =================================================================================
 app.onError((err, c) => {
-    console.error('Server Error:', err);
-    // 返回 JSON 格式错误以便前端处理，或者文本
+    console.error('❌ [FATAL] Server Error:', err);
     if (c.req.path.startsWith('/api') || c.req.header('accept')?.includes('json')) {
         return c.json({ success: false, message: `Server Error: ${err.message}` }, 500);
     }
@@ -24,7 +23,7 @@ app.onError((err, c) => {
 });
 
 // =================================================================================
-// 0. 靜態資源服務
+// 1. 静态资源服务
 // =================================================================================
 app.use('/*', serveStatic({ root: './', manifest }));
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
@@ -34,313 +33,223 @@ app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
 // =================================================================================
-// 1. 全局中間件：注入核心依賴
+// 2. 全局中间件：注入核心依赖 (DB, Config, Storage)
 // =================================================================================
 app.use('*', async (c, next) => {
-    // 基础检查
-    if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)");
-    if (!c.env.CONFIG_KV) throw new Error("缺少 KV 绑定 (CONFIG_KV)");
-    if (!c.env.SESSION_SECRET) throw new Error("缺少环境变量 SESSION_SECRET");
-
-    initCrypto(c.env.SESSION_SECRET);
-    
-    const db = new Database(c.env.DB);
-    c.set('db', db);
-
-    const configManager = new ConfigManager(c.env.CONFIG_KV);
-    c.set('configManager', configManager);
-
-    const config = await configManager.load();
-    c.set('config', config);
-
-    // 关键修复：存储初始化失败时，不应阻断整个应用
-    // 我们注入一个“伪”存储对象，只有在真正调用 upload/download 时才报错
     try {
-        const storage = initStorage(config, c.env); 
-        c.set('storage', storage);
-    } catch (storageErr) {
-        console.warn("存储后端未就绪:", storageErr.message);
-        c.set('storage', { 
-            list: async () => [], 
-            upload: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); },
-            download: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); },
-            remove: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); }
-        });
-    }
+        // 1. 检查环境变量
+        if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)");
+        if (!c.env.CONFIG_KV) throw new Error("缺少 KV 绑定 (CONFIG_KV)");
+        if (!c.env.SESSION_SECRET) throw new Error("缺少环境变量 SESSION_SECRET");
 
-    await next();
+        // 2. 初始化加密与数据库
+        initCrypto(c.env.SESSION_SECRET);
+        c.set('db', new Database(c.env.DB));
+        c.set('configManager', new ConfigManager(c.env.CONFIG_KV));
+
+        // 3. 加载配置
+        const config = await c.get('configManager').load();
+        c.set('config', config);
+
+        // 4. 初始化存储 (带容错处理)
+        try {
+            const storage = initStorage(config, c.env); 
+            c.set('storage', storage);
+        } catch (storageErr) {
+            console.warn("⚠️ 存储初始化警告:", storageErr.message);
+            // 注入伪存储对象，防止系统崩溃，允许用户进入 Admin 修复配置
+            c.set('storage', { 
+                list: async () => [], 
+                upload: async () => { throw new Error(`存储未配置: ${storageErr.message}`); },
+                download: async () => { throw new Error(`存储未配置: ${storageErr.message}`); },
+                remove: async () => { throw new Error(`存储未配置: ${storageErr.message}`); }
+            });
+        }
+        await next();
+    } catch (e) { throw e; }
 });
 
 // =================================================================================
-// 2. 認證中間件
+// 3. 认证中间件
 // =================================================================================
 const authMiddleware = async (c, next) => {
-    const publicPaths = [
-        '/login', '/register', '/setup', '/fix-root',
-        '/api/public', '/share/view', '/share/download', 
-        '/assets', '/favicon.ico'
-    ];
-    if (publicPaths.some(path => c.req.path.startsWith(path))) return await next();
+    const publicPaths = ['/login', '/register', '/setup', '/api/public', '/share/', '/assets', '/favicon.ico'];
+    if (publicPaths.some(p => c.req.path.startsWith(p))) return await next();
 
     const token = getCookie(c, 'remember_me');
-    if (!token) {
-        if (c.req.path.startsWith('/api') || c.req.header('accept')?.includes('json')) {
-            return c.json({ success: false, message: '未登錄' }, 401);
-        }
-        return c.redirect('/login');
-    }
+    if (!token) return c.req.path.startsWith('/api') ? c.json({success:false, message: '未登录'}, 401) : c.redirect('/login');
 
-    const db = c.get('db');
-    const tokenData = await data.findAuthToken(db, token);
-
-    if (!tokenData || tokenData.expires_at < Date.now()) {
-        if (tokenData) await data.deleteAuthToken(db, token);
+    const user = await data.findAuthToken(c.get('db'), token);
+    if (!user || user.expires_at < Date.now()) {
+        if(user) await data.deleteAuthToken(c.get('db'), token);
         deleteCookie(c, 'remember_me');
-        if (c.req.path.startsWith('/api') || c.req.header('accept')?.includes('json')) {
-            return c.json({ success: false, message: '會話已過期' }, 401);
-        }
         return c.redirect('/login');
     }
 
-    c.set('user', { id: tokenData.user_id, username: tokenData.username, isAdmin: !!tokenData.is_admin });
+    c.set('user', { id: user.user_id, username: user.username, isAdmin: !!user.is_admin });
     await next();
 };
+app.use('*', authMiddleware);
 
 const adminMiddleware = async (c, next) => {
     const user = c.get('user');
-    if (!user || !user.isAdmin) return c.json({ success: false, message: '權限不足' }, 403);
+    if (!user || !user.isAdmin) return c.json({ success: false, message: '权限不足' }, 403);
     await next();
 };
 
-app.use('*', authMiddleware);
-
 // =================================================================================
-// 3. 核心路由 (Setup/Auth)
+// 4. 上传接口 (带详细调试日志)
 // =================================================================================
+app.post('/upload', async (c) => {
+    console.log("🚀 [Upload] 收到上传请求");
+    const db = c.get('db'); 
+    const storage = c.get('storage'); 
+    const user = c.get('user');
+    const config = c.get('config');
 
-// 初始化路由：用于修复 Admin 账号
-app.get('/setup', async (c) => {
-    const db = c.get('db');
     try {
-        await db.initDB();
-        let admin = await data.findUserByName(db, 'admin');
+        const body = await c.req.parseBody(); 
+        const folderIdRaw = c.req.query('folderId');
+        const folderId = parseInt(decrypt(folderIdRaw));
+        const conflictMode = c.req.query('conflictMode') || 'rename';
         
-        if (!admin) {
-            // 创建 Admin 账号
-            const bcrypt = await import('bcryptjs');
-            const salt = bcrypt.genSaltSync(10);
-            const hash = bcrypt.hashSync('admin', salt);
-            const newUser = await data.createUser(db, 'admin', hash);
-            await data.createFolder(db, '/', null, newUser.id);
-            await db.run("UPDATE users SET is_admin = 1 WHERE id = ?", [newUser.id]);
-            return c.text("✅ 初始化成功: 账号 admin / 密码 admin (请立即修改密码)");
-        } else {
-            // 强制修复权限
-            await db.run("UPDATE users SET is_admin = 1 WHERE username = 'admin'");
-            return c.text("✅ Admin 账号已存在，权限已修复。请登录配置存储。");
+        console.log(`🔍 [Upload] 参数: folderId=${folderId}, raw=${folderIdRaw}, conflict=${conflictMode}, user=${user.username}`);
+
+        if (isNaN(folderId)) throw new Error(`无效的 Folder ID`);
+
+        const files = [];
+        Object.keys(body).forEach(key => {
+            const val = body[key];
+            if (val instanceof File) files.push(val);
+            else if (Array.isArray(val)) val.forEach(v => { if (v instanceof File) files.push(v); });
+        });
+
+        console.log(`📦 [Upload] 待处理文件数: ${files.length}`);
+        if (files.length === 0) return c.json({ success: false, message: '未接收到文件' }, 400);
+
+        const totalSize = files.reduce((acc, f) => acc + f.size, 0);
+        if (!await data.checkQuota(db, user.id, totalSize)) return c.json({ success: false, message: '空间不足' }, 413);
+
+        const results = [];
+        for (const file of files) {
+            console.log(`👉 [Upload] 开始处理: ${file.name} (${file.size} bytes)`);
+            try {
+                let finalName = file.name;
+                let existingFile = null;
+
+                // 1. 验重逻辑
+                if (conflictMode === 'overwrite') {
+                    console.log(`   [Check] 模式: 覆盖。正在查找旧文件...`);
+                    // 兼容旧表结构，不查 id
+                    existingFile = await db.get(
+                        "SELECT message_id FROM files WHERE fileName = ? AND folder_id = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)", 
+                        [file.name, folderId, user.id]
+                    );
+                    if (existingFile) console.log(`   [Check] 发现旧文件, message_id: ${existingFile.message_id}`);
+                } else {
+                    console.log(`   [Check] 模式: 重命名。获取唯一文件名...`);
+                    finalName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
+                    console.log(`   [Check] 最终文件名: ${finalName}`);
+                }
+
+                // 2. 上传到存储后端
+                console.log(`   [Storage] 上传至后端 (${config.storageMode})...`);
+                const uploadResult = await storage.upload(file, finalName, file.type, user.id, folderId, config);
+                console.log(`   [Storage] 上传成功, FileID: ${uploadResult.fileId}`);
+                
+                // 3. 写入数据库
+                if (existingFile) {
+                    console.log(`   [DB] 更新旧记录...`);
+                    await data.updateFile(db, BigInt(existingFile.message_id), {
+                        file_id: uploadResult.fileId,
+                        size: file.size,
+                        date: Date.now(),
+                        mimetype: file.type,
+                        thumb_file_id: uploadResult.thumbId || null
+                    }, user.id);
+                } else {
+                    const messageId = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
+                    console.log(`   [DB] 插入新记录, MessageID: ${messageId}`);
+                    await data.addFile(db, {
+                        message_id: messageId, 
+                        fileName: finalName, 
+                        mimetype: file.type, 
+                        size: file.size,
+                        file_id: uploadResult.fileId, 
+                        thumb_file_id: uploadResult.thumbId || null, 
+                        date: Date.now()
+                    }, folderId, user.id, config.storageMode);
+                }
+                
+                results.push({ name: finalName, success: true });
+                console.log(`✅ [Upload] 文件 ${file.name} 全部完成`);
+            } catch (innerErr) {
+                console.error(`❌ [Upload] 文件 ${file.name} 失败:`, innerErr);
+                results.push({ name: file.name, success: false, error: innerErr.message });
+            }
         }
-    } catch (e) {
-        return c.text(`❌ 初始化失败: ${e.message}`, 500);
+        return c.json({ success: true, results });
+
+    } catch (err) {
+        console.error("❌ [Upload] 接口异常:", err);
+        return c.json({ success: false, message: err.message }, 500);
     }
 });
 
-app.post('/login', async (c) => {
-    const { username, password } = await c.req.parseBody();
-    const db = c.get('db');
-    const user = await data.findUserByName(db, username);
-    const bcrypt = await import('bcryptjs');
-    
-    if (user && bcrypt.compareSync(password, user.password)) {
-        const array = new Uint8Array(32); crypto.getRandomValues(array);
-        const token = Array.from(array, b => b.toString(16).padStart(2, '0')).join('');
-        const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
-        await data.createAuthToken(db, user.id, token, expiresAt);
-        setCookie(c, 'remember_me', token, { httpOnly: true, secure: true, maxAge: 30 * 24 * 60 * 60, path: '/' });
-        return c.redirect('/');
-    }
-    return c.text('賬號或密碼錯誤', 401);
-});
-
-app.post('/register', async (c) => {
-    const { username, password } = await c.req.parseBody();
-    if (!username || !password) return c.text('缺少参数', 400);
-    const db = c.get('db');
-    if (await data.findUserByName(db, username)) return c.text('用户已存在', 400);
-    
-    const bcrypt = await import('bcryptjs');
-    try {
-        const newUser = await data.createUser(db, username, bcrypt.hashSync(password, 10));
-        await data.createFolder(db, '/', null, newUser.id);
-        return c.redirect('/login?registered=true');
-    } catch (e) { return c.text('注册失败: ' + e.message, 500); }
-});
-
-app.get('/logout', async (c) => {
-    const token = getCookie(c, 'remember_me');
-    if (token) await data.deleteAuthToken(c.get('db'), token);
-    deleteCookie(c, 'remember_me');
-    return c.redirect('/login');
-});
-
 // =================================================================================
-// 4. 分享功能
+// 5. 核心业务路由
 // =================================================================================
-const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加載...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加載失敗');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>錯誤</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密碼保護</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="請輸入密碼" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解鎖</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>時間: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下載文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夾)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
 
-app.get('/api/public/share/:token', async (c) => {
-    const db = c.get('db'); const token = c.req.param('token');
-    let item = await data.getFileByShareToken(db, token);
-    let type = 'file';
-    if (!item) { item = await data.getFolderByShareToken(db, token); type = 'folder'; }
-    if (!item) return c.json({ success: false, message: '无效链接' }, 404);
-
-    const isLocked = !!item.share_password;
-    const isUnlocked = getCookie(c, `share_unlock_${token}`) === 'true';
-
-    if (isLocked && !isUnlocked) return c.json({ success: true, type, isLocked: true, isUnlocked: false, name: type === 'file' ? item.fileName : item.name });
-
-    if (type === 'file') {
-        return c.json({ success: true, type: 'file', isLocked, isUnlocked: true, name: item.fileName, size: item.size, date: item.date, mimeType: item.mimetype, downloadUrl: `/share/download/${token}` });
-    } else {
-        const contents = await data.getFolderContents(db, item.id, item.user_id);
-        const safeFolders = contents.folders.map(f => ({ name: f.name, size: 0, type: 'folder' }));
-        const safeFiles = contents.files.map(f => ({ name: f.fileName, size: f.size, date: f.date, type: 'file', id: f.message_id }));
-        return c.json({ success: true, type: 'folder', isLocked, isUnlocked: true, name: item.name, files: safeFiles, folders: safeFolders });
-    }
-});
-
-app.post('/api/public/share/:token/auth', async (c) => {
-    const db = c.get('db'); const token = c.req.param('token'); const { password } = await c.req.parseBody();
-    let item = await data.getFileByShareToken(db, token);
-    if (!item) item = await data.getFolderByShareToken(db, token);
-    if (!item) return c.json({ success: false, message: '无效' }, 404);
-    const bcrypt = await import('bcryptjs');
-    if (item.share_password && bcrypt.compareSync(password, item.share_password)) {
-        setCookie(c, `share_unlock_${token}`, 'true', { path: '/', maxAge: 86400, httpOnly: true, secure: true });
-        return c.json({ success: true });
-    }
-    return c.json({ success: false, message: '密码错误' }, 401);
-});
-
-app.get('/share/download/:token', async (c) => {
-    const db = c.get('db'); const storage = c.get('storage'); const token = c.req.param('token');
-    const file = await data.getFileByShareToken(db, token);
-    if (!file) return c.text('Not found', 404);
-    if (file.share_password && getCookie(c, `share_unlock_${token}`) !== 'true') return c.text('Auth required', 403);
-    try {
-        const { stream, contentType, headers } = await storage.download(file.file_id, file.user_id);
-        const resHeaders = new Headers(headers);
-        resHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
-        resHeaders.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
-        return new Response(stream, { headers: resHeaders });
-    } catch (e) { return c.text(`Download Error: ${e.message}`, 500); }
-});
-app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
-
-// =================================================================================
-// 5. 業務路由
-// =================================================================================
 app.get('/', async (c) => {
     const db = c.get('db'); const user = c.get('user');
     initCrypto(c.env.SESSION_SECRET);
     let root = await data.getRootFolder(db, user.id);
-    if (!root || !root.id) {
+    if (!root) {
         await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
         await data.createFolder(db, '/', null, user.id);
         root = await data.getRootFolder(db, user.id);
     }
-    if (!root || !root.id) return c.text("Root folder missing", 500);
-    const encryptedId = encrypt(root.id);
-    return c.redirect(`/view/${encryptedId}`);
+    return c.redirect(`/view/${encrypt(root.id)}`);
 });
 app.get('/fix-root', async (c) => c.redirect('/'));
 
 app.get('/api/folder/:encryptedId', async (c) => {
     const db = c.get('db'); const user = c.get('user'); 
-    const folderId = parseInt(decrypt(c.req.param('encryptedId')));
-    if (!folderId) return c.json({ success: false, message: '无效ID' }, 400);
+    const encId = c.req.param('encryptedId');
+    console.log(`[Folder] 获取: ${encId}`);
     try {
-        const result = await data.getFolderContents(db, folderId, user.id);
-        const pathArr = await data.getFolderPath(db, folderId, user.id);
-        return c.json({ contents: result, path: pathArr });
-    } catch (e) { return c.json({ success: false, message: e.message }, 500); }
-});
-
-app.get('/api/folders', async (c) => {
-    try { return c.json(await data.getAllFolders(c.get('db'), c.get('user').id)); } catch (e) { return c.json({ success: false, message: e.message }, 500); }
-});
-
-// 上传接口
-app.post('/upload', async (c) => {
-    const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user'); const config = c.get('config');
-    const body = await c.req.parseBody(); 
-    const folderId = parseInt(decrypt(c.req.query('folderId')));
-    const conflictMode = c.req.query('conflictMode') || 'rename'; 
-    
-    if (isNaN(folderId)) return c.json({ success: false, message: 'Invalid folderId' }, 400);
-
-    const files = [];
-    Object.keys(body).forEach(key => {
-        const value = body[key];
-        if (value instanceof File) files.push(value);
-        else if (Array.isArray(value)) value.forEach(v => { if (v instanceof File) files.push(v); });
-    });
-    if (files.length === 0) return c.json({ success: false, message: 'No files' }, 400);
-
-    const totalSize = files.reduce((acc, f) => acc + f.size, 0);
-    if (!await data.checkQuota(db, user.id, totalSize)) return c.json({ success: false, message: 'Quota exceeded' }, 413);
-
-    const results = [];
-    for (const file of files) {
-        try {
-            let finalFileName = file.name;
-            let existingFile = null;
-
-            if (conflictMode === 'overwrite') {
-                existingFile = await db.get(
-                    "SELECT * FROM files WHERE fileName = ? AND folder_id = ? AND user_id = ? AND is_deleted = 0", 
-                    [file.name, folderId, user.id]
-                );
-            } else {
-                finalFileName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
-            }
-
-            const uploadResult = await storage.upload(file, finalFileName, file.type, user.id, folderId, config);
-            
-            if (existingFile) {
-                await data.updateFile(db, BigInt(existingFile.message_id), {
-                    file_id: uploadResult.fileId,
-                    size: file.size,
-                    date: Date.now(),
-                    mimetype: file.type,
-                    thumb_file_id: uploadResult.thumbId || null
-                }, user.id);
-            } else {
-                const messageId = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
-                await data.addFile(db, {
-                    message_id: messageId, fileName: finalFileName, mimetype: file.type, size: file.size,
-                    file_id: uploadResult.fileId, thumb_file_id: uploadResult.thumbId || null, date: Date.now()
-                }, folderId, user.id, config.storageMode);
-            }
-            results.push({ name: finalFileName, success: true });
-        } catch (e) { results.push({ name: file.name, success: false, error: e.message }); }
+        const id = parseInt(decrypt(encId));
+        if (isNaN(id)) return c.json({success:false, message:'ID 无效'}, 400);
+        const res = await data.getFolderContents(db, id, user.id);
+        const pathArr = await data.getFolderPath(db, id, user.id);
+        return c.json({ contents: res, path: pathArr });
+    } catch (e) { 
+        console.error(`[Folder] 获取失败:`, e);
+        return c.json({ success: false, message: e.message }, 500); 
     }
-    return c.json({ success: true, results });
 });
+
+app.get('/api/folders', async (c) => c.json(await data.getAllFolders(c.get('db'), c.get('user').id)));
 
 app.get('/download/proxy/:messageId', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user');
-    const file = (await data.getFilesByIds(db, [BigInt(c.req.param('messageId'))], user.id))[0];
-    if (!file) return c.text('File not found', 404);
+    const files = await data.getFilesByIds(db, [BigInt(c.req.param('messageId'))], user.id);
+    if (!files.length) return c.text('File not found', 404);
+    const file = files[0];
     try {
+        console.log(`[Download] 下载文件: ${file.fileName}, ID: ${file.file_id}`);
         const { stream, contentType, headers } = await storage.download(file.file_id, user.id);
         const resHeaders = new Headers(headers);
         resHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
         resHeaders.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
         return new Response(stream, { headers: resHeaders });
-    } catch (e) { return c.text(`Download Error: ${e.message}`, 500); }
+    } catch (e) { 
+        console.error(`[Download] 失败:`, e);
+        return c.text(`Download Error: ${e.message}`, 500); 
+    }
 });
 
+// 其他API
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
 app.post('/api/folder/create', async (c) => {
     const { name, parentId } = await c.req.json();
@@ -368,22 +277,19 @@ app.post('/api/rename', async (c) => {
     return c.json({ success: true });
 });
 app.post('/api/move', async (c) => {
+    console.log("[Move] 收到移动请求");
     const { files, folders, targetFolderId, conflictMode } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
-    await data.moveItems(c.get('db'), c.get('storage'), (files||[]).map(BigInt), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode || 'rename');
-    return c.json({ success: true });
+    try {
+        await data.moveItems(c.get('db'), c.get('storage'), (files||[]).map(BigInt), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode || 'rename');
+        return c.json({ success: true });
+    } catch(e) {
+        console.error("[Move] 失败:", e);
+        return c.json({ success: false, message: e.message }, 500);
+    }
 });
 app.get('/api/search', async (c) => c.json(await data.searchItems(c.get('db'), c.req.query('q'), c.get('user').id)));
-app.post('/api/file/save', async (c) => {
-    const { id, content } = await c.req.json();
-    const f = (await data.getFilesByIds(c.get('db'), [BigInt(id)], c.get('user').id))[0];
-    if(!f) return c.json({success:false},404);
-    const blob = new Blob([content], {type:'text/plain'});
-    const up = await c.get('storage').upload(new File([blob],f.fileName), f.fileName, 'text/plain', c.get('user').id, f.folder_id, c.get('config'));
-    await data.updateFile(c.get('db'), BigInt(id), { file_id: up.fileId, size: blob.size, date: Date.now() }, c.get('user').id);
-    return c.json({success:true});
-});
 app.get('/api/shares', async (c) => c.json(await data.getActiveShares(c.get('db'), c.get('user').id)));
 app.post('/api/share/create', async (c) => {
     const { itemId, itemType, expiresIn, password, customExpiresAt } = await c.req.json();
@@ -403,22 +309,67 @@ app.post('/api/folder/lock', async (c) => {
 });
 
 // =================================================================================
-// 7. 管理員路由 (Admin Routes)
+// 6. 分享展示页面与下载
+// =================================================================================
+const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加載...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加載失敗');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>錯誤</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密碼保護</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="請輸入密碼" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解鎖</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>時間: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下載文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夾)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
+
+app.get('/api/public/share/:token', async (c) => {
+    const db = c.get('db'); const token = c.req.param('token');
+    let item = await data.getFileByShareToken(db, token);
+    let type = 'file';
+    if (!item) { item = await data.getFolderByShareToken(db, token); type = 'folder'; }
+    if (!item) return c.json({ success: false, message: '无效链接' }, 404);
+    const isLocked = !!item.share_password;
+    const isUnlocked = getCookie(c, `share_unlock_${token}`) === 'true';
+    if (isLocked && !isUnlocked) return c.json({ success: true, type, isLocked: true, isUnlocked: false, name: type === 'file' ? item.fileName : item.name });
+    if (type === 'file') {
+        return c.json({ success: true, type: 'file', isLocked, isUnlocked: true, name: item.fileName, size: item.size, date: item.date, mimeType: item.mimetype, downloadUrl: `/share/download/${token}` });
+    } else {
+        const contents = await data.getFolderContents(db, item.id, item.user_id);
+        const safeFolders = contents.folders.map(f => ({ name: f.name, size: 0, type: 'folder' }));
+        const safeFiles = contents.files.map(f => ({ name: f.fileName, size: f.size, date: f.date, type: 'file', id: f.message_id }));
+        return c.json({ success: true, type: 'folder', isLocked, isUnlocked: true, name: item.name, files: safeFiles, folders: safeFolders });
+    }
+});
+app.post('/api/public/share/:token/auth', async (c) => {
+    const db = c.get('db'); const token = c.req.param('token'); const { password } = await c.req.parseBody();
+    let item = await data.getFileByShareToken(db, token);
+    if (!item) item = await data.getFolderByShareToken(db, token);
+    if (!item) return c.json({ success: false, message: '无效' }, 404);
+    const bcrypt = await import('bcryptjs');
+    if (item.share_password && bcrypt.compareSync(password, item.share_password)) {
+        setCookie(c, `share_unlock_${token}`, 'true', { path: '/', maxAge: 86400, httpOnly: true, secure: true });
+        return c.json({ success: true });
+    }
+    return c.json({ success: false, message: '密码错误' }, 401);
+});
+app.get('/share/download/:token', async (c) => {
+    const db = c.get('db'); const storage = c.get('storage'); const token = c.req.param('token');
+    const file = await data.getFileByShareToken(db, token);
+    if (!file) return c.text('Not found', 404);
+    if (file.share_password && getCookie(c, `share_unlock_${token}`) !== 'true') return c.text('Auth required', 403);
+    try {
+        const { stream, contentType, headers } = await storage.download(file.file_id, file.user_id);
+        const resHeaders = new Headers(headers);
+        resHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+        resHeaders.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
+        return new Response(stream, { headers: resHeaders });
+    } catch (e) { return c.text(`Download Error: ${e.message}`, 500); }
+});
+app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
+
+// =================================================================================
+// 7. 管理员路由
 // =================================================================================
 app.get('/api/admin/users', adminMiddleware, async (c) => {
-    try { return c.json(await data.listAllUsers(c.get('db'))); } 
-    catch(e) { return c.json({success:false, message: e.message}, 500); }
+    try { return c.json(await data.listAllUsers(c.get('db'))); } catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
-
 app.get('/api/admin/users-with-quota', adminMiddleware, async (c) => c.json({users: await data.listAllUsersWithQuota(c.get('db'))}));
-
 app.post('/api/admin/storage-mode', adminMiddleware, async (c) => {
     const body = await c.req.json();
     await c.get('configManager').save({ storageMode: body.mode });
     return c.json({success:true});
 });
-
-// 修正：确保 WebDAV 配置能保存
 app.get('/api/admin/webdav', adminMiddleware, async(c) => {
     const config = await c.get('configManager').load();
     return c.json(config.webdav ? [config.webdav] : []);
@@ -428,7 +379,6 @@ app.post('/api/admin/webdav', adminMiddleware, async(c) => {
     await c.get('configManager').save({webdav: webdavConfig}); 
     return c.json({success:true}); 
 });
-
 app.get('/api/admin/s3', adminMiddleware, async(c) => {
     const config = await c.get('configManager').load();
     return c.json({s3: config.s3});
@@ -438,7 +388,6 @@ app.post('/api/admin/s3', adminMiddleware, async(c) => {
     await c.get('configManager').save({s3: s3Config}); 
     return c.json({success:true}); 
 });
-
 app.post('/api/admin/scan', adminMiddleware, async (c) => {
     const { userId } = await c.req.json();
     const stream = new ReadableStream({
