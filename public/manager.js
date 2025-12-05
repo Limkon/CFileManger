@@ -40,12 +40,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const progressArea = document.getElementById('progressArea');
     const fileInput = document.getElementById('fileInput');
     const folderInput = document.getElementById('folderInput');
-    const uploadStatusText = document.createElement('div'); // 动态创建上传状态文本
+    const uploadStatusText = document.createElement('div'); 
     uploadStatusText.id = 'uploadStatusText';
     uploadStatusText.style.textAlign = 'center';
     uploadStatusText.style.fontSize = '12px';
     uploadStatusText.style.marginTop = '5px';
-    progressArea.appendChild(uploadStatusText);
+    // 防止重复添加
+    if(progressArea && !document.getElementById('uploadStatusText')) {
+        progressArea.appendChild(uploadStatusText);
+    }
     
     // 配额
     const quotaUsedEl = document.getElementById('quotaUsed');
@@ -1184,8 +1187,24 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // =================================================================================
+    // 12. 辅助函数 (ID, 转义, 格式化, 图标)
+    // =================================================================================
     function getItemId(item) { return item.type === 'file' ? `file:${item.message_id}` : `folder:${item.id}`; }
     function parseItemId(str) { const p = str.split(':'); return [p[0], p[1]]; }
     function escapeHtml(text) { if (!text) return ''; return text.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[m]); }
     function formatSize(bytes) { if (bytes === 0) return '0 B'; const k = 1024; const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; const i = Math.floor(Math.log(bytes) / Math.log(k)); return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; }
+    
+    // 获取文件图标 (已修复 Missing Function)
+    function getIconClass(item) {
+        if (item.type === 'folder') return 'fas fa-folder';
+        const ext = item.name.split('.').pop().toLowerCase();
+        if (['jpg','jpeg','png','gif','bmp','webp'].includes(ext)) return 'fas fa-file-image';
+        if (['mp4','mov','avi','mkv','webm'].includes(ext)) return 'fas fa-file-video';
+        if (['mp3','wav','ogg','flac'].includes(ext)) return 'fas fa-file-audio';
+        if (['pdf'].includes(ext)) return 'fas fa-file-pdf';
+        if (['zip','rar','7z','tar','gz'].includes(ext)) return 'fas fa-file-archive';
+        if (['txt','md','js','html','css','json','py','java'].includes(ext)) return 'fas fa-file-alt';
+        return 'fas fa-file';
+    }
 });
