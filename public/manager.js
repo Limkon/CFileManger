@@ -296,7 +296,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 统一处理右键事件
     document.querySelector('.main-content').addEventListener('contextmenu', (e) => {
         e.preventDefault();
         const targetItem = e.target.closest('.item-card, .list-item');
@@ -539,116 +538,176 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch(e) { alert('搜索失败'); }
     });
     
-    // Move
-    async function loadAllFolders() {
-        try {
-            const res = await axios.get('/api/folders');
-            folderTree.innerHTML = '';
-            const rootDiv = document.createElement('div');
-            rootDiv.className = 'folder-item'; rootDiv.textContent = '/ (根目录)';
-            const rootId = (currentPath.length > 0) ? currentPath[0].encrypted_id : (res.data.find(f => !f.parent_id)?.encrypted_id || '');
-            rootDiv.dataset.id = rootId;
-            rootDiv.onclick = () => selectMoveTarget(rootDiv); folderTree.appendChild(rootDiv);
-            res.data.forEach(f => {
-                const div = document.createElement('div'); div.className = 'folder-item'; div.style.paddingLeft = '20px';
-                div.innerHTML = `<i class="fas fa-folder" style="color:#fbc02d;"></i> ${escapeHtml(f.name)}`;
-                div.dataset.id = f.encrypted_id; div.onclick = () => selectMoveTarget(div); folderTree.appendChild(div);
-            });
-        } catch (e) {}
-    }
-    function selectMoveTarget(el) {
-        document.querySelectorAll('.folder-item.selected').forEach(e => e.classList.remove('selected'));
-        el.classList.add('selected'); selectedMoveTargetId = el.dataset.id; confirmMoveBtn.disabled = false;
-    }
-    document.getElementById('moveBtn').addEventListener('click', () => {
-        if (selectedItems.size === 0) return; selectedMoveTargetId = null; confirmMoveBtn.disabled = true; moveModal.style.display = 'flex'; loadAllFolders();
-    });
-    confirmMoveBtn.addEventListener('click', async () => {
-        if (!selectedMoveTargetId) return;
-        const files = []; const folders = [];
-        selectedItems.forEach(id => { const [type, realId] = parseItemId(id); if (type === 'file') files.push(realId); else folders.push(realId); });
-        try {
-            confirmMoveBtn.textContent = '移动中...';
-            await axios.post('/api/move', { files, folders, targetFolderId: selectedMoveTargetId });
-            moveModal.style.display = 'none'; selectedItems.clear(); loadFolder(currentFolderId);
-        } catch (e) { alert('移动失败'); } finally { confirmMoveBtn.textContent = '确定移动'; }
-    });
-    cancelMoveBtn.onclick = () => moveModal.style.display = 'none';
-    
-    // Share
-    document.getElementById('shareBtn').addEventListener('click', () => {
-        if (selectedItems.size !== 1) return;
-        shareModal.style.display = 'flex'; document.getElementById('shareOptions').style.display = 'block'; shareResult.style.display = 'none';
-        sharePasswordInput.value = ''; customExpiresInput.style.display = 'none'; expiresInSelect.value = '24h';
-    });
-    expiresInSelect.addEventListener('change', () => { customExpiresInput.style.display = expiresInSelect.value === 'custom' ? 'block' : 'none'; });
-    confirmShareBtn.addEventListener('click', async () => {
-        const [type, id] = parseItemId(Array.from(selectedItems)[0]);
-        const expiresIn = expiresInSelect.value;
-        let customTime = null;
-        if (expiresIn === 'custom') { const d = new Date(customExpiresInput.value); if (isNaN(d.getTime())) return alert('时间无效'); customTime = d.getTime(); }
-        try {
-            const res = await axios.post('/api/share/create', { itemId: id, itemType: type, expiresIn, customExpiresAt: customTime, password: sharePasswordInput.value });
-            if (res.data.success) {
-                document.getElementById('shareOptions').style.display = 'none'; shareResult.style.display = 'block';
-                const link = `${window.location.origin}${res.data.link}`;
-                shareLinkContainer.textContent = link; copyLinkBtn.dataset.link = link;
-            }
-        } catch (e) { alert('分享失败'); }
-    });
-    copyLinkBtn.addEventListener('click', () => navigator.clipboard.writeText(copyLinkBtn.dataset.link).then(() => alert('已复制')));
-    closeShareModalBtn.onclick = cancelShareBtn.onclick = () => shareModal.style.display = 'none';
+    // =================================================================================
+    // 9. 上传功能 (修改版：支持递归扫描文件夹，队列上传)
+    // =================================================================================
 
-    // 9. 上传功能 (拖拽与按钮共用)
+    // 辅助函数：扫描 Entry (文件或文件夹)
+    async function scanEntry(entry) {
+        if (entry.isFile) {
+            return new Promise((resolve) => {
+                entry.file((file) => {
+                    resolve([file]);
+                });
+            });
+        } else if (entry.isDirectory) {
+            const dirReader = entry.createReader();
+            let entries = [];
+            
+            // readEntries 可能不会一次返回所有文件，需要递归调用
+            const readAllEntries = async () => {
+                return new Promise((resolve, reject) => {
+                    dirReader.readEntries(async (results) => {
+                        if (results.length === 0) {
+                            resolve(entries);
+                        } else {
+                            entries = entries.concat(results);
+                            await readAllEntries();
+                            resolve(entries);
+                        }
+                    }, reject);
+                });
+            };
+
+            await readAllEntries();
+            
+            let files = [];
+            for (const subEntry of entries) {
+                const subFiles = await scanEntry(subEntry);
+                files = files.concat(subFiles);
+            }
+            return files;
+        }
+        return [];
+    }
+
+    // 核心：处理拖拽的文件项 (DataTransferItemList)
+    async function scanDataTransferItems(items) {
+        let files = [];
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (item.kind === 'file') {
+                const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : (item.getAsEntry ? item.getAsEntry() : null);
+                if (entry) {
+                    const entryFiles = await scanEntry(entry);
+                    files = files.concat(entryFiles);
+                } else {
+                    const file = item.getAsFile();
+                    if(file) files.push(file);
+                }
+            }
+        }
+        return files;
+    }
+
+    /**
+     * 通用上传执行函数 (队列模式)
+     */
     async function executeUpload(files, targetEncryptedId) {
         if (!files || files.length === 0) return alert('请选择至少一个文件');
-        const folderId = targetEncryptedId || currentFolderId;
-        const formData = new FormData();
-        let fileCount = 0;
         
+        const folderId = targetEncryptedId || currentFolderId;
+        
+        // 1. 将 FileList 或 Array 统一转为数组
+        let fileQueue = [];
         if (files instanceof FileList) {
-            for(let i=0; i<files.length; i++) { formData.append('files', files[i]); fileCount++; }
+            fileQueue = Array.from(files);
         } else if (Array.isArray(files)) {
-            files.forEach(f => { formData.append('files', f); fileCount++; });
+            fileQueue = files;
         } else {
-            formData.append('files', files); fileCount = 1;
+            fileQueue = [files];
         }
 
-        if (fileCount === 0) return;
+        if (fileQueue.length === 0) return;
 
+        // 2. 初始化 UI
         if(uploadModal.style.display === 'none') {
             uploadModal.style.display = 'block';
-            document.getElementById('uploadForm').style.display = 'none';
+            document.getElementById('uploadForm').style.display = 'none'; // 隐藏表单
         }
         
         progressArea.style.display = 'block';
+        const progressBar = document.getElementById('progressBar');
+        
+        // 创建或清空状态文字
+        let statusText = document.getElementById('uploadStatusText');
+        if (!statusText) {
+            statusText = document.createElement('div');
+            statusText.style.textAlign = 'center';
+            statusText.style.marginTop = '5px';
+            statusText.style.fontSize = '12px';
+            statusText.id = 'uploadStatusText';
+            progressArea.appendChild(statusText);
+        }
+        statusText.textContent = '准备上传...';
+
         progressBar.style.width = '0%';
         progressBar.textContent = '0%';
+
+        // 3. 计算总大小
+        const totalBytes = fileQueue.reduce((acc, f) => acc + f.size, 0);
+        let loadedBytesGlobal = 0;
         
-        try {
-            const res = await axios.post(`/upload?folderId=${folderId || ''}`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-                onUploadProgress: (p) => {
-                    const percent = Math.round((p.loaded * 100) / p.total);
-                    progressBar.style.width = percent + '%';
-                    progressBar.textContent = percent + '%';
-                }
-            });
-            console.log('上传结果:', res.data);
-            setTimeout(() => {
-                uploadModal.style.display = 'none';
-                document.getElementById('uploadForm').style.display = 'block';
-                uploadForm.reset();
-                progressArea.style.display = 'none';
-                loadFolder(currentFolderId);
-                updateQuota();
-            }, 500);
-        } catch (error) {
-            alert('上传失败: ' + (error.response?.data?.message || error.message));
-            progressArea.style.display = 'none';
+        let successCount = 0;
+        let failCount = 0;
+        const errors = [];
+
+        // 4. 逐个上传
+        for (let i = 0; i < fileQueue.length; i++) {
+            const file = fileQueue[i];
+            const formData = new FormData();
+            
+            // 处理文件名 (优先使用 webkitRelativePath 如果有)
+            // 注意：通过 scanEntry 获取的 File 对象通常没有 webkitRelativePath，或者路径是相对于拖拽根目录的
+            // 简单处理：直接上传，后端扁平化存储。如果想要保持层级，需要在后端支持创建文件夹。
+            // 目前系统后端不支持自动创建层级目录，所以所有文件会平铺。
+            const fileName = file.name; 
+            formData.append('files', file, fileName);
+
+            statusText.textContent = `正在上传 (${i + 1}/${fileQueue.length}): ${fileName}`;
+
+            try {
+                let currentFileLoaded = 0;
+                await axios.post(`/upload?folderId=${folderId || ''}`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                    onUploadProgress: (p) => {
+                        const diff = p.loaded - currentFileLoaded;
+                        currentFileLoaded = p.loaded;
+                        loadedBytesGlobal += diff;
+                        if (totalBytes > 0) {
+                            const percent = Math.min(100, Math.round((loadedBytesGlobal * 100) / totalBytes));
+                            progressBar.style.width = percent + '%';
+                            progressBar.textContent = percent + '%';
+                        }
+                    }
+                });
+                successCount++;
+            } catch (error) {
+                console.error(`文件 ${fileName} 上传失败:`, error);
+                failCount++;
+                errors.push(`${fileName}: ${error.response?.data?.message || error.message}`);
+            }
+        }
+
+        // 5. 结果处理
+        let resultMsg = `上传结束。\n成功: ${successCount}\n失败: ${failCount}`;
+        if (failCount > 0) {
+            resultMsg += '\n\n错误详情:\n' + errors.join('\n').slice(0, 200) + '...';
+            alert(resultMsg);
+        } else {
+            console.log(resultMsg);
+        }
+
+        setTimeout(() => {
             uploadModal.style.display = 'none';
             document.getElementById('uploadForm').style.display = 'block';
-        }
+            uploadForm.reset();
+            progressArea.style.display = 'none';
+            if (statusText) statusText.textContent = '';
+            
+            loadFolder(currentFolderId);
+            updateQuota();
+        }, 1000);
     }
 
     document.getElementById('showUploadModalBtn').addEventListener('click', () => {
@@ -669,7 +728,7 @@ document.addEventListener('DOMContentLoaded', () => {
         await executeUpload(rawFiles, targetEncryptedId);
     });
 
-    // 拖拽相关逻辑 (全屏检测)
+    // 拖拽相关逻辑
     let dragCounter = 0;
     
     window.addEventListener('dragenter', (e) => {
@@ -695,7 +754,16 @@ document.addEventListener('DOMContentLoaded', () => {
         dragCounter = 0;
         dropZoneOverlay.style.display = 'none';
         
-        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        // 使用 DataTransferItem 接口来支持文件夹递归
+        const items = e.dataTransfer.items;
+        if (items && items.length > 0) {
+            // 扫描所有拖入的项目（包括文件夹内的文件）
+            const files = await scanDataTransferItems(items);
+            if (files.length > 0) {
+                await executeUpload(files, currentFolderId);
+            }
+        } else if (e.dataTransfer.files.length > 0) {
+            // 回退兼容
             await executeUpload(e.dataTransfer.files, currentFolderId);
         }
     });
