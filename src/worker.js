@@ -408,6 +408,9 @@ app.get('/', async (c) => {
     return c.redirect(`/view/${encryptedId}`);
 });
 
+// 手動修復接口 (備用)
+app.get('/fix-root', async (c) => c.redirect('/'));
+
 // 獲取文件夾內容
 app.get('/api/folder/:encryptedId', async (c) => {
     const db = c.get('db'); const user = c.get('user'); const encId = c.req.param('encryptedId');
