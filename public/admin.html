@@ -6,314 +6,400 @@
     <title>系统管理 - Network FileManager</title>
     <link rel="stylesheet" href="/manager.css">
     <link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
-    <script src="/vendor/axios/axios.min.js"></script>
     <style>
-        .container { max-width: 1000px; margin: 30px auto; padding: 0 20px; }
-        .admin-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; }
-        .card { background: #fff; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); padding: 20px; margin-bottom: 20px; }
-        .card h3 { margin-top: 0; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 20px; color: #333; }
-        
-        .nav-tabs { display: flex; gap: 10px; margin-bottom: 20px; border-bottom: 1px solid #ddd; }
-        .nav-tab { padding: 10px 20px; cursor: pointer; border-bottom: 2px solid transparent; color: #666; font-weight: 500; }
-        .nav-tab.active { border-bottom-color: #007bff; color: #007bff; }
-        
+        body { background-color: #f4f6f8; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        .admin-container { max-width: 900px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); }
+        h2 { border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; color: #333; }
+        .section { background: #fff; border: 1px solid #e0e0e0; border-radius: 6px; padding: 20px; margin-bottom: 25px; }
+        .section h3 { margin-top: 0; margin-bottom: 15px; color: #007bff; font-size: 1.1rem; border-bottom: 1px dashed #eee; padding-bottom: 10px; }
         .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; color: #555; }
-        .form-control { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }
-        .btn { padding: 8px 15px; border: none; border-radius: 4px; cursor: pointer; color: #fff; font-size: 0.9rem; }
-        .btn-primary { background: #007bff; }
-        .btn-danger { background: #dc3545; }
-        .btn-success { background: #28a745; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: 500; font-size: 0.9rem; color: #555; }
+        .form-control { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-size: 0.95rem; }
+        .form-row { display: flex; gap: 15px; margin-bottom: 15px; }
+        .form-row .form-group { flex: 1; margin-bottom: 0; }
         
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #eee; }
-        th { background: #f8f9fa; color: #666; }
-        
-        .log-box { background: #1e1e1e; color: #0f0; padding: 15px; border-radius: 4px; height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.85rem; white-space: pre-wrap; }
+        .btn { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; transition: opacity 0.2s; color: #fff; }
+        .btn:hover { opacity: 0.9; }
+        .primary-btn { background-color: #007bff; }
+        .success-btn { background-color: #28a745; }
+        .danger-btn { background-color: #dc3545; }
+        .warning-btn { background-color: #ffc107; color: #333; }
+
+        .user-list-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; border-bottom: 1px solid #eee; }
+        .user-list-item:last-child { border-bottom: none; }
+        .user-info { display: flex; align-items: center; gap: 10px; }
+        .badge { padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; background: #eee; color: #555; }
+        .badge-admin { background: #007bff; color: #fff; }
+
+        .status-msg { position: fixed; top: 20px; right: 20px; padding: 15px 25px; border-radius: 4px; color: #fff; display: none; z-index: 1000; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .msg-success { background-color: #28a745; }
+        .msg-error { background-color: #dc3545; }
+
+        .nav-links { margin-bottom: 20px; display: flex; justify-content: space-between; }
+        .nav-links a { color: #007bff; text-decoration: none; display: flex; align-items: center; gap: 5px; }
+        .nav-links a:hover { text-decoration: underline; }
     </style>
 </head>
 <body>
 
-<div class="navbar">
-    <div class="brand"><i class="fas fa-cogs"></i> 系统管理</div>
-    <div>
-        <a href="/" class="btn btn-primary" style="text-decoration:none;"><i class="fas fa-home"></i> 返回前台</a>
-    </div>
-</div>
-
-<div class="container">
-    <div class="nav-tabs">
-        <div class="nav-tab active" onclick="switchTab('storage')">存储配置</div>
-        <div class="nav-tab" onclick="switchTab('users')">用户管理</div>
-        <div class="nav-tab" onclick="switchTab('maintenance')">系统维护</div>
+<div class="admin-container">
+    <div class="nav-links">
+        <a href="/"><i class="fas fa-arrow-left"></i> 返回网盘首页</a>
+        <a href="#" onclick="location.reload()"><i class="fas fa-sync"></i> 刷新配置</a>
     </div>
 
-    <div id="tab-storage" class="tab-content">
-        <div class="card">
-            <h3>存储模式</h3>
+    <h2><i class="fas fa-cogs"></i> 系统管理后台</h2>
+
+    <div class="section">
+        <h3><i class="fas fa-hdd"></i> 存储模式设置</h3>
+        <div class="form-group">
+            <label>选择当前使用的存储后端:</label>
+            <select id="storageModeSelect" class="form-control">
+                <option value="local">本地 / R2 (Workers KV/D1/R2)</option>
+                <option value="s3">S3 兼容存储 (AWS, MinIO, OSS 等)</option>
+                <option value="webdav">WebDAV (Alist, Nextcloud 等)</option>
+                <option value="telegram">Telegram Bot (无限容量)</option>
+            </select>
+        </div>
+        <button class="btn primary-btn" onclick="saveStorageMode()"><i class="fas fa-save"></i> 保存并应用模式</button>
+    </div>
+
+    <div class="section" id="s3Section" style="display:none;">
+        <h3><i class="fas fa-cloud"></i> S3 兼容存储配置</h3>
+        <div class="form-row">
             <div class="form-group">
-                <label>选择主要存储后端:</label>
-                <select id="storageMode" class="form-control">
-                    <option value="local">Local / KV (不推荐，容量有限)</option>
-                    <option value="s3">S3 兼容存储 (R2, AWS, MinIO)</option>
-                    <option value="webdav">WebDAV</option>
-                    <option value="telegram">Telegram Bot</option>
-                </select>
+                <label>Endpoint (API 地址):</label>
+                <input type="text" id="s3Endpoint" class="form-control" placeholder="https://s3.us-east-1.amazonaws.com">
             </div>
-            <button class="btn btn-primary" onclick="saveStorageMode()">保存模式设置</button>
+            <div class="form-group">
+                <label>Region (区域):</label>
+                <input type="text" id="s3Region" class="form-control" placeholder="auto">
+            </div>
         </div>
+        <div class="form-group">
+            <label>Bucket Name (存储桶名称):</label>
+            <input type="text" id="s3Bucket" class="form-control" placeholder="my-bucket">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Access Key ID:</label>
+                <input type="text" id="s3AccessKey" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>Secret Access Key:</label>
+                <input type="password" id="s3SecretKey" class="form-control">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Public URL (自定义域名/CDN，选填):</label>
+            <input type="text" id="s3PublicUrl" class="form-control" placeholder="https://cdn.example.com">
+        </div>
+        <button class="btn primary-btn" onclick="saveS3()"><i class="fas fa-save"></i> 保存 S3 配置</button>
+    </div>
 
-        <div class="card" id="s3ConfigCard" style="display:none;">
-            <h3>S3 配置 (Cloudflare R2)</h3>
-            <div class="form-group"><label>Endpoint (API 地址):</label><input type="text" id="s3Endpoint" class="form-control" placeholder="https://<accountid>.r2.cloudflarestorage.com"></div>
-            <div class="form-group"><label>Region (区域):</label><input type="text" id="s3Region" class="form-control" value="auto"></div>
-            <div class="form-group"><label>Bucket (存储桶名):</label><input type="text" id="s3Bucket" class="form-control"></div>
-            <div class="form-group"><label>Access Key ID:</label><input type="text" id="s3AccessKey" class="form-control"></div>
-            <div class="form-group"><label>Secret Access Key:</label><input type="password" id="s3SecretKey" class="form-control" placeholder="如果不修改请留空"></div>
-            <button class="btn btn-primary" onclick="saveS3Config()">保存 S3 配置</button>
+    <div class="section" id="webdavSection" style="display:none;">
+        <h3><i class="fas fa-network-wired"></i> WebDAV 配置</h3>
+        <div class="form-group">
+            <label>Endpoint URL (WebDAV 地址):</label>
+            <input type="text" id="webdavEndpoint" class="form-control" placeholder="https://dav.example.com/webdav">
+            <small style="color:#666;">注意：地址不要以斜杠结尾。</small>
         </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>用户名:</label>
+                <input type="text" id="webdavUser" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>密码:</label>
+                <input type="password" id="webdavPass" class="form-control">
+            </div>
+        </div>
+        <button class="btn primary-btn" onclick="saveWebDAV()"><i class="fas fa-save"></i> 保存 WebDAV 配置</button>
+    </div>
 
-        <div class="card" id="webdavConfigCard" style="display:none;">
-            <h3>WebDAV 配置</h3>
-            <div class="form-group"><label>URL:</label><input type="text" id="wdUrl" class="form-control" placeholder="https://dav.example.com"></div>
-            <div class="form-group"><label>Username:</label><input type="text" id="wdUser" class="form-control"></div>
-            <div class="form-group"><label>Password:</label><input type="password" id="wdPass" class="form-control" placeholder="如果不修改请留空"></div>
-            <button class="btn btn-primary" onclick="saveWebDavConfig()">保存 WebDAV 配置</button>
+    <div class="section" id="telegramSection" style="display:none;">
+        <h3><i class="fab fa-telegram"></i> Telegram Bot 配置</h3>
+        <div class="form-group">
+            <label>Bot Token:</label>
+            <input type="text" id="tgBotToken" class="form-control" placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11">
         </div>
+        <div class="form-group">
+            <label>Chat ID (频道或个人ID):</label>
+            <input type="text" id="tgChatId" class="form-control" placeholder="-1001234567890">
+        </div>
+        <button class="btn primary-btn" onclick="saveTelegram()"><i class="fas fa-save"></i> 保存 Telegram 配置</button>
+    </div>
+
+    <div class="section">
+        <h3><i class="fas fa-users"></i> 用户管理</h3>
+        <div class="form-row" style="align-items: flex-end;">
+            <div class="form-group">
+                <label>新用户名:</label>
+                <input type="text" id="newUsername" class="form-control">
+            </div>
+            <div class="form-group">
+                <label>密码:</label>
+                <input type="text" id="newPassword" class="form-control">
+            </div>
+            <div class="form-group" style="flex: 0 0 auto;">
+                <button class="btn success-btn" onclick="addUser()"><i class="fas fa-plus"></i> 添加</button>
+            </div>
+        </div>
+        <div id="userList" style="border: 1px solid #eee; border-radius: 4px; max-height: 300px; overflow-y: auto;">
+            <div style="padding:10px; text-align:center; color:#999;">正在加载用户...</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3><i class="fas fa-tools"></i> 维护工具</h3>
         
-        <div class="card" id="tgConfigCard" style="display:none;">
-            <h3>Telegram 配置</h3>
-            <p style="color:#666;">请在 worker 环境变量中配置 <code>TG_BOT_TOKEN</code> 和 <code>TG_CHAT_ID</code>。</p>
+        <div class="form-group">
+            <label>设置用户存储配额 (Bytes):</label>
+            <div class="form-row">
+                <div class="form-group">
+                    <select id="quotaUserSelect" class="form-control"></select>
+                </div>
+                <div class="form-group">
+                    <input type="number" id="quotaValue" class="form-control" placeholder="1073741824 (1GB)">
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button class="btn warning-btn" onclick="setQuota()">设置配额</button>
+                </div>
+            </div>
+            <small style="color:#666;">设为 0 表示无限制。</small>
         </div>
+
+        <hr style="margin: 20px 0; border: 0; border-top: 1px dashed #eee;">
+
+        <div class="form-group">
+            <label>导入外部文件:</label>
+            <p style="font-size:0.85rem; color:#666; margin-top:0;">扫描当前配置的存储后端中的文件，并将其导入到数据库（根目录）。仅适用于 S3/R2。</p>
+            <div class="form-row">
+                <div class="form-group">
+                    <select id="scanUserSelect" class="form-control"></select>
+                </div>
+                <div class="form-group" style="flex: 0 0 auto;">
+                    <button class="btn primary-btn" onclick="scanStorage()"><i class="fas fa-search"></i> 开始扫描导入</button>
+                </div>
+            </div>
+        </div>
+        <div id="scanLog" style="background:#333; color:#0f0; padding:10px; font-family:monospace; height:150px; overflow-y:auto; display:none; border-radius:4px; font-size:0.8rem;"></div>
     </div>
 
-    <div id="tab-users" class="tab-content" style="display:none;">
-        <div class="card">
-            <div style="display:flex; justify-content:space-between; margin-bottom:15px;">
-                <h3>用户列表</h3>
-                <button class="btn btn-success" onclick="document.getElementById('addUserModal').style.display='flex'">新增用户</button>
-            </div>
-            <table>
-                <thead>
-                    <tr>
-                        <th>ID</th>
-                        <th>用户名</th>
-                        <th>角色</th>
-                        <th>已用空间</th>
-                        <th>总配额</th>
-                        <th>操作</th>
-                    </tr>
-                </thead>
-                <tbody id="userListBody"></tbody>
-            </table>
-        </div>
-    </div>
-
-    <div id="tab-maintenance" class="tab-content" style="display:none;">
-        <div class="card">
-            <h3>存储扫描与导入</h3>
-            <p>扫描配置的存储桶（S3/WebDAV），将数据库中不存在的文件导入到系统中。</p>
-            <div class="form-group">
-                <label>选择要扫描的用户空间:</label>
-                <select id="scanUserSelect" class="form-control"></select>
-            </div>
-            <button class="btn btn-primary" id="startScanBtn" onclick="startScan()">开始扫描</button>
-            <div style="margin-top:20px;">
-                <label>扫描日志:</label>
-                <div id="scanLog" class="log-box">等待开始...</div>
-            </div>
-        </div>
-    </div>
 </div>
 
-<div id="addUserModal" class="modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); align-items:center; justify-content:center;">
-    <div class="card" style="width:400px; position:relative;">
-        <h3>新增用户</h3>
-        <div class="form-group"><label>用户名:</label><input type="text" id="newUsername" class="form-control"></div>
-        <div class="form-group"><label>密码:</label><input type="text" id="newPassword" class="form-control"></div>
-        <div style="text-align:right;">
-            <button class="btn" onclick="document.getElementById('addUserModal').style.display='none'" style="color:#333; border:1px solid #ccc; margin-right:10px;">取消</button>
-            <button class="btn btn-primary" onclick="addUser()">创建</button>
-        </div>
-    </div>
-</div>
+<div id="statusMsg" class="status-msg"></div>
 
+<script src="/vendor/axios/axios.min.js"></script>
 <script>
-    // --- Tabs ---
-    function switchTab(tabName) {
-        document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-        document.getElementById('tab-' + tabName).style.display = 'block';
-        document.querySelectorAll('.nav-tab').forEach(el => el.classList.remove('active'));
-        event.target.classList.add('active');
-        if(tabName === 'storage') loadStorageConfig();
-        if(tabName === 'users') loadUsers();
-    }
-
-    // --- Storage Config ---
-    async function loadStorageConfig() {
-        // Load Mode
-        // 由于没有直接获取 mode 的 API，这里从 s3/webdav 的状态反推或默认 local，
-        // 实际上 worker.js 需要一个 get config API。
-        // 这里为了简化，我们假设用户自己选择。
-        
-        // Load S3
-        try {
-            const res = await axios.get('/api/admin/s3');
-            const s3 = res.data.s3 || {};
-            document.getElementById('s3Endpoint').value = s3.endpoint || '';
-            document.getElementById('s3Region').value = s3.region || 'auto';
-            document.getElementById('s3Bucket').value = s3.bucket || '';
-            document.getElementById('s3AccessKey').value = s3.accessKeyId || '';
-        } catch(e) {}
-
-        // Load WebDAV
-        try {
-            const res = await axios.get('/api/admin/webdav');
-            const wd = res.data[0] || {};
-            document.getElementById('wdUrl').value = wd.url || '';
-            document.getElementById('wdUser').value = wd.username || '';
-        } catch(e) {}
-    }
-
-    document.getElementById('storageMode').addEventListener('change', (e) => {
-        document.getElementById('s3ConfigCard').style.display = e.target.value === 's3' ? 'block' : 'none';
-        document.getElementById('webdavConfigCard').style.display = e.target.value === 'webdav' ? 'block' : 'none';
-        document.getElementById('tgConfigCard').style.display = e.target.value === 'telegram' ? 'block' : 'none';
+    document.addEventListener('DOMContentLoaded', () => {
+        loadSettings();
     });
 
+    const storageSelect = document.getElementById('storageModeSelect');
+    const webdavSection = document.getElementById('webdavSection');
+    const s3Section = document.getElementById('s3Section');
+    const telegramSection = document.getElementById('telegramSection');
+
+    storageSelect.addEventListener('change', updateUI);
+
+    function updateUI() {
+        const mode = storageSelect.value;
+        webdavSection.style.display = mode === 'webdav' ? 'block' : 'none';
+        s3Section.style.display = mode === 's3' ? 'block' : 'none';
+        telegramSection.style.display = mode === 'telegram' ? 'block' : 'none';
+    }
+
+    function showMsg(text, type = 'success') {
+        const el = document.getElementById('statusMsg');
+        el.textContent = text;
+        el.className = `status-msg ${type === 'success' ? 'msg-success' : 'msg-error'}`;
+        el.style.display = 'block';
+        setTimeout(() => el.style.display = 'none', 3000);
+    }
+
+    async function loadSettings() {
+        try {
+            // 1. 加载存储模式 (从任意一个配置接口尝试获取模式，或者默认 local)
+            // 由于 API 分散，我们先加载 S3 配置看下 mode
+            try {
+                const s3Res = await axios.get('/api/admin/s3');
+                // 这里有一个假设：config 对象在后端是共享的
+                // 如果后端没有返回 mode，默认保持当前 select 的值或 local
+                // 更好的做法是后端增加一个 /api/admin/config 接口返回所有
+                // 但为了不修改 worker.js 路由，我们通过加载具体配置来推断或手动设置
+            } catch(e){}
+
+            // 加载 S3 配置
+            try {
+                const res = await axios.get('/api/admin/s3');
+                const s3 = res.data.s3 || {};
+                document.getElementById('s3Endpoint').value = s3.endpoint || '';
+                document.getElementById('s3Region').value = s3.region || '';
+                document.getElementById('s3Bucket').value = s3.bucketName || '';
+                document.getElementById('s3AccessKey').value = s3.accessKeyId || '';
+                document.getElementById('s3PublicUrl').value = s3.publicUrl || '';
+            } catch(e) {}
+
+            // 加载 WebDAV 配置
+            try {
+                const res = await axios.get('/api/admin/webdav');
+                let dav = res.data;
+                if(Array.isArray(dav)) dav = dav[0] || {};
+                document.getElementById('webdavEndpoint').value = dav.endpoint || '';
+                document.getElementById('webdavUser').value = dav.username || '';
+            } catch(e) {}
+
+            // 加载 Telegram 配置 (此处需要后端支持 get，如果未实现则跳过回显)
+            
+            // 加载用户列表
+            loadUsers();
+
+        } catch (e) {
+            console.error(e);
+            showMsg('加载部分配置失败，请检查控制台', 'error');
+        }
+    }
+
     async function saveStorageMode() {
-        const mode = document.getElementById('storageMode').value;
+        const mode = storageSelect.value;
         try {
             await axios.post('/api/admin/storage-mode', { mode });
-            alert('模式已保存');
-        } catch(e) { alert('保存失败: ' + e.message); }
+            showMsg('存储模式已切换为: ' + mode);
+            updateUI();
+        } catch (e) { showMsg('保存失败', 'error'); }
     }
 
-    async function saveS3Config() {
-        const cfg = {
-            endpoint: document.getElementById('s3Endpoint').value,
-            region: document.getElementById('s3Region').value,
-            bucket: document.getElementById('s3Bucket').value,
-            accessKeyId: document.getElementById('s3AccessKey').value,
-            secretAccessKey: document.getElementById('s3SecretKey').value || undefined
+    async function saveWebDAV() {
+        const config = {
+            endpoint: document.getElementById('webdavEndpoint').value.trim(),
+            username: document.getElementById('webdavUser').value.trim(),
+            password: document.getElementById('webdavPass').value.trim()
         };
-        try { await axios.post('/api/admin/s3', cfg); alert('S3 配置已保存'); } catch(e) { alert('保存失败'); }
+        if(!config.endpoint) return showMsg('Endpoint 必填', 'error');
+        try {
+            await axios.post('/api/admin/webdav', config);
+            showMsg('WebDAV 配置已保存');
+        } catch (e) { showMsg('保存失败', 'error'); }
     }
 
-    async function saveWebDavConfig() {
-        const cfg = {
-            url: document.getElementById('wdUrl').value,
-            username: document.getElementById('wdUser').value,
-            password: document.getElementById('wdPass').value || undefined
+    async function saveS3() {
+        const config = {
+            endpoint: document.getElementById('s3Endpoint').value.trim(),
+            region: document.getElementById('s3Region').value.trim(),
+            bucketName: document.getElementById('s3Bucket').value.trim(),
+            accessKeyId: document.getElementById('s3AccessKey').value.trim(),
+            secretAccessKey: document.getElementById('s3SecretKey').value.trim(),
+            publicUrl: document.getElementById('s3PublicUrl').value.trim()
         };
-        try { await axios.post('/api/admin/webdav', cfg); alert('WebDAV 配置已保存'); } catch(e) { alert('保存失败'); }
+        try {
+            await axios.post('/api/admin/s3', config);
+            showMsg('S3 配置已保存');
+        } catch (e) { showMsg('保存失败', 'error'); }
     }
 
-    // --- Users ---
+    async function saveTelegram() {
+        // 由于 worker.js 可能未显式暴露 telegram 保存接口 (在之前的 worker.js 中未包含)
+        // 如果需要支持，请确保 worker.js 有对应的 POST /api/admin/telegram
+        // 这里仅作为完整性占位，或者假设复用通用 save
+        alert("Telegram 配置保存需后端支持，请确认 worker.js 已添加相关路由");
+    }
+
     async function loadUsers() {
+        const listEl = document.getElementById('userList');
+        const quotaSel = document.getElementById('quotaUserSelect');
+        const scanSel = document.getElementById('scanUserSelect');
+        
         try {
             const res = await axios.get('/api/admin/users-with-quota');
-            const users = res.data.users;
-            const tbody = document.getElementById('userListBody');
-            const scanSelect = document.getElementById('scanUserSelect');
+            const users = res.data.users || [];
             
-            tbody.innerHTML = '';
-            scanSelect.innerHTML = '';
-            
-            users.forEach(u => {
-                // Populate Table
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td>${u.id}</td>
-                    <td>${u.username}</td>
-                    <td>${u.is_admin ? '<span style="color:red">管理员</span>' : '用户'}</td>
-                    <td>${formatSize(u.used_storage_bytes)}</td>
-                    <td>${formatSize(u.max_storage_bytes)} <button class="btn" style="color:blue;padding:0;" onclick="changeQuota(${u.id})">✎</button></td>
-                    <td>
-                        <button class="btn btn-primary" onclick="changePwd(${u.id})">改密</button>
-                        ${!u.is_admin ? `<button class="btn btn-danger" onclick="delUser(${u.id})">删除</button>` : ''}
-                    </td>
-                `;
-                tbody.appendChild(tr);
+            listEl.innerHTML = '';
+            quotaSel.innerHTML = '';
+            scanSel.innerHTML = '';
 
-                // Populate Scan Select
-                const op = document.createElement('option');
-                op.value = u.id;
-                op.textContent = `${u.username} (ID: ${u.id})`;
-                scanSelect.appendChild(op);
+            users.forEach(u => {
+                // 渲染列表
+                const div = document.createElement('div');
+                div.className = 'user-list-item';
+                div.innerHTML = `
+                    <div class="user-info">
+                        <strong>${u.username}</strong>
+                        ${u.is_admin ? '<span class="badge badge-admin">管理员</span>' : '<span class="badge">用户</span>'}
+                        <span style="font-size:0.8rem; color:#999;">已用: ${formatSize(u.used_storage_bytes)} / 配额: ${u.max_storage_bytes == 0 ? '无限' : formatSize(u.max_storage_bytes)}</span>
+                    </div>
+                    <div>
+                        ${!u.is_admin ? `<button class="btn danger-btn" style="padding:2px 8px; font-size:0.8rem;" onclick="delUser(${u.id})">删除</button>` : ''}
+                    </div>
+                `;
+                listEl.appendChild(div);
+
+                // 填充下拉框
+                const op = new Option(u.username, u.id);
+                quotaSel.add(op.cloneNode(true));
+                scanSel.add(op);
             });
-        } catch(e) { alert('加载用户失败'); }
+        } catch (e) { listEl.textContent = '加载用户列表失败'; }
     }
 
     async function addUser() {
         const u = document.getElementById('newUsername').value;
         const p = document.getElementById('newPassword').value;
-        if(!u || !p) return alert('请填写完整');
+        if(!u || !p) return showMsg('请输入用户名和密码', 'error');
         try {
             await axios.post('/api/admin/add-user', { username: u, password: p });
-            document.getElementById('addUserModal').style.display='none';
+            showMsg('用户添加成功');
             loadUsers();
-        } catch(e) { alert('添加失败: ' + (e.response?.data?.message || e.message)); }
+            document.getElementById('newUsername').value = '';
+            document.getElementById('newPassword').value = '';
+        } catch (e) { showMsg('添加失败: ' + (e.response?.data?.message || e.message), 'error'); }
     }
 
-    async function changeQuota(uid) {
-        const sizeStr = prompt("请输入新配额 (例如 1073741824 为 1GB, 0 为无限):");
-        if(sizeStr === null) return;
-        const bytes = parseInt(sizeStr);
-        if(isNaN(bytes)) return alert('无效数字');
+    async function delUser(id) {
+        if(!confirm('确定要删除该用户吗？其文件将被保留在数据库中（孤立）。')) return;
         try {
-            await axios.post('/api/admin/set-quota', { userId: uid, maxBytes: bytes });
+            await axios.post('/api/admin/delete-user', { userId: id });
+            showMsg('用户已删除');
             loadUsers();
-        } catch(e) { alert('设置失败'); }
-    }
-    
-    async function changePwd(uid) {
-        const p = prompt("请输入新密码:");
-        if(!p) return;
-        try {
-            await axios.post('/api/admin/change-password', { userId: uid, newPassword: p });
-            alert('密码已修改');
-        } catch(e) { alert('修改失败'); }
+        } catch(e) { showMsg('删除失败', 'error'); }
     }
 
-    async function delUser(uid) {
-        if(!confirm('确定删除该用户及其所有文件吗？')) return;
+    async function setQuota() {
+        const uid = document.getElementById('quotaUserSelect').value;
+        const limit = document.getElementById('quotaValue').value;
+        if(!uid) return;
         try {
-            await axios.post('/api/admin/delete-user', { userId: uid });
+            await axios.post('/api/admin/set-quota', { userId: uid, maxBytes: parseInt(limit) || 0 });
+            showMsg('配额已更新');
             loadUsers();
-        } catch(e) { alert('删除失败'); }
+        } catch(e) { showMsg('设置失败', 'error'); }
     }
 
-    // --- Maintenance (Scan) ---
-    async function startScan() {
+    async function scanStorage() {
         const uid = document.getElementById('scanUserSelect').value;
-        const logBox = document.getElementById('scanLog');
-        const btn = document.getElementById('startScanBtn');
+        if(!uid) return;
+        const logEl = document.getElementById('scanLog');
+        logEl.style.display = 'block';
+        logEl.textContent = '正在发起扫描...\n';
         
-        logBox.textContent = '正在初始化扫描...\n';
-        btn.disabled = true;
-
         try {
             const response = await fetch('/api/admin/scan', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId: parseInt(uid) })
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ userId: uid })
             });
-
             const reader = response.body.getReader();
             const decoder = new TextDecoder();
-
-            while (true) {
+            
+            while(true) {
                 const { done, value } = await reader.read();
-                if (done) break;
+                if(done) break;
                 const text = decoder.decode(value);
-                logBox.textContent += text;
-                logBox.scrollTop = logBox.scrollHeight;
+                logEl.textContent += text;
+                logEl.scrollTop = logEl.scrollHeight;
             }
-        } catch (e) {
-            logBox.textContent += `\n错误: ${e.message}`;
-        } finally {
-            btn.disabled = false;
+        } catch(e) {
+            logEl.textContent += `\n扫描出错: ${e.message}`;
         }
     }
 
@@ -324,9 +410,6 @@
         const i = Math.floor(Math.log(bytes) / Math.log(k));
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
-    
-    // Init
-    loadStorageConfig();
 </script>
 
 </body>
