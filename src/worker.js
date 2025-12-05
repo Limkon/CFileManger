@@ -12,15 +12,19 @@ import { initCrypto, encrypt, decrypt } from './crypto.js';
 const app = new Hono();
 
 // =================================================================================
-// 全局错误处理 (新增：显示具体错误信息)
+// 全局错误处理
 // =================================================================================
 app.onError((err, c) => {
     console.error('Server Error:', err);
-    return c.text(`❌ 系统严重错误 (Internal Server Error):\n\n${err.message}\n\nStack:\n${err.stack}`, 500);
+    // 返回 JSON 格式错误以便前端处理，或者文本
+    if (c.req.path.startsWith('/api') || c.req.header('accept')?.includes('json')) {
+        return c.json({ success: false, message: `Server Error: ${err.message}` }, 500);
+    }
+    return c.text(`❌ 系统严重错误:\n${err.message}\n\nStack:\n${err.stack}`, 500);
 });
 
 // =================================================================================
-// 0. 靜態資源服務 (優先處理)
+// 0. 靜態資源服務
 // =================================================================================
 app.use('/*', serveStatic({ root: './', manifest }));
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
@@ -30,50 +34,41 @@ app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
 // =================================================================================
-// 1. 全局中間件：注入 DB, Config, Storage, Crypto
+// 1. 全局中間件：注入核心依賴
 // =================================================================================
 app.use('*', async (c, next) => {
+    // 基础检查
+    if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)");
+    if (!c.env.CONFIG_KV) throw new Error("缺少 KV 绑定 (CONFIG_KV)");
+    if (!c.env.SESSION_SECRET) throw new Error("缺少环境变量 SESSION_SECRET");
+
+    initCrypto(c.env.SESSION_SECRET);
+    
+    const db = new Database(c.env.DB);
+    c.set('db', db);
+
+    const configManager = new ConfigManager(c.env.CONFIG_KV);
+    c.set('configManager', configManager);
+
+    const config = await configManager.load();
+    c.set('config', config);
+
+    // 关键修复：存储初始化失败时，不应阻断整个应用
+    // 我们注入一个“伪”存储对象，只有在真正调用 upload/download 时才报错
     try {
-        // 检查环境变量是否缺失
-        if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)。请检查 wrangler.toml。");
-        if (!c.env.CONFIG_KV) throw new Error("缺少 KV 命名空间绑定 (CONFIG_KV)。请检查 wrangler.toml。");
-        if (!c.env.SESSION_SECRET) throw new Error("缺少环境变量 SESSION_SECRET。");
-
-        initCrypto(c.env.SESSION_SECRET);
-        
-        const db = new Database(c.env.DB);
-        c.set('db', db);
-
-        const configManager = new ConfigManager(c.env.CONFIG_KV);
-        c.set('configManager', configManager);
-
-        const config = await configManager.load();
-        c.set('config', config);
-
-        // 尝试初始化存储后端
-        try {
-            const storage = initStorage(config, c.env); 
-            c.set('storage', storage);
-        } catch (storageErr) {
-            console.error("Storage Init Failed:", storageErr);
-            // 如果是 API 请求，返回 JSON 错误
-            if (c.req.path.startsWith('/api')) {
-                return c.json({ success: false, message: `存储后端初始化失败: ${storageErr.message}` }, 500);
-            }
-            // 否则允许继续，也许用户是去 /setup 或 /admin 修复配置
-            // 但如果后续路由用到 storage，会再次报错
-            c.set('storage', { 
-                list: async () => [], 
-                upload: async () => { throw new Error("存储未配置"); },
-                download: async () => { throw new Error("存储未配置"); },
-                remove: async () => { throw new Error("存储未配置"); }
-            });
-        }
-
-        await next();
-    } catch (e) {
-        throw e; // 抛给 app.onError 处理
+        const storage = initStorage(config, c.env); 
+        c.set('storage', storage);
+    } catch (storageErr) {
+        console.warn("存储后端未就绪:", storageErr.message);
+        c.set('storage', { 
+            list: async () => [], 
+            upload: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); },
+            download: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); },
+            remove: async () => { throw new Error(`请先在后台配置存储后端: ${storageErr.message}`); }
+        });
     }
+
+    await next();
 });
 
 // =================================================================================
@@ -120,28 +115,32 @@ const adminMiddleware = async (c, next) => {
 app.use('*', authMiddleware);
 
 // =================================================================================
-// 3. 核心路由
+// 3. 核心路由 (Setup/Auth)
 // =================================================================================
 
+// 初始化路由：用于修复 Admin 账号
 app.get('/setup', async (c) => {
     const db = c.get('db');
     try {
         await db.initDB();
         let admin = await data.findUserByName(db, 'admin');
+        
         if (!admin) {
+            // 创建 Admin 账号
             const bcrypt = await import('bcryptjs');
             const salt = bcrypt.genSaltSync(10);
             const hash = bcrypt.hashSync('admin', salt);
             const newUser = await data.createUser(db, 'admin', hash);
-            admin = { id: newUser.id };
             await data.createFolder(db, '/', null, newUser.id);
             await db.run("UPDATE users SET is_admin = 1 WHERE id = ?", [newUser.id]);
-            return c.text("✅ 初始化成功: 預設管理員 admin / admin");
-        } 
-        await db.run("UPDATE users SET is_admin = 1 WHERE username = 'admin'");
-        return c.text("✅ 數據庫結構已就緒");
+            return c.text("✅ 初始化成功: 账号 admin / 密码 admin (请立即修改密码)");
+        } else {
+            // 强制修复权限
+            await db.run("UPDATE users SET is_admin = 1 WHERE username = 'admin'");
+            return c.text("✅ Admin 账号已存在，权限已修复。请登录配置存储。");
+        }
     } catch (e) {
-        return c.text(`❌ 初始化失敗: ${e.message}`, 500);
+        return c.text(`❌ 初始化失败: ${e.message}`, 500);
     }
 });
 
@@ -158,23 +157,22 @@ app.post('/login', async (c) => {
         await data.createAuthToken(db, user.id, token, expiresAt);
         setCookie(c, 'remember_me', token, { httpOnly: true, secure: true, maxAge: 30 * 24 * 60 * 60, path: '/' });
         return c.redirect('/');
-    } else {
-        return c.text('賬號或密碼錯誤', 401);
     }
+    return c.text('賬號或密碼錯誤', 401);
 });
 
 app.post('/register', async (c) => {
     const { username, password } = await c.req.parseBody();
-    if (!username || !password) return c.text('用戶名和密碼不能為空', 400);
+    if (!username || !password) return c.text('缺少参数', 400);
     const db = c.get('db');
-    if (await data.findUserByName(db, username)) return c.text('用戶名已存在', 400);
+    if (await data.findUserByName(db, username)) return c.text('用户已存在', 400);
+    
     const bcrypt = await import('bcryptjs');
-    const hash = bcrypt.hashSync(password, 10);
     try {
-        const newUser = await data.createUser(db, username, hash);
+        const newUser = await data.createUser(db, username, bcrypt.hashSync(password, 10));
         await data.createFolder(db, '/', null, newUser.id);
         return c.redirect('/login?registered=true');
-    } catch (e) { return c.text('註冊失敗: ' + e.message, 500); }
+    } catch (e) { return c.text('注册失败: ' + e.message, 500); }
 });
 
 app.get('/logout', async (c) => {
@@ -194,7 +192,7 @@ app.get('/api/public/share/:token', async (c) => {
     let item = await data.getFileByShareToken(db, token);
     let type = 'file';
     if (!item) { item = await data.getFolderByShareToken(db, token); type = 'folder'; }
-    if (!item) return c.json({ success: false, message: '鏈接無效' }, 404);
+    if (!item) return c.json({ success: false, message: '无效链接' }, 404);
 
     const isLocked = !!item.share_password;
     const isUnlocked = getCookie(c, `share_unlock_${token}`) === 'true';
@@ -215,13 +213,13 @@ app.post('/api/public/share/:token/auth', async (c) => {
     const db = c.get('db'); const token = c.req.param('token'); const { password } = await c.req.parseBody();
     let item = await data.getFileByShareToken(db, token);
     if (!item) item = await data.getFolderByShareToken(db, token);
-    if (!item) return c.json({ success: false, message: '無效' }, 404);
+    if (!item) return c.json({ success: false, message: '无效' }, 404);
     const bcrypt = await import('bcryptjs');
     if (item.share_password && bcrypt.compareSync(password, item.share_password)) {
         setCookie(c, `share_unlock_${token}`, 'true', { path: '/', maxAge: 86400, httpOnly: true, secure: true });
         return c.json({ success: true });
     }
-    return c.json({ success: false, message: '錯誤' }, 401);
+    return c.json({ success: false, message: '密码错误' }, 401);
 });
 
 app.get('/share/download/:token', async (c) => {
@@ -235,7 +233,7 @@ app.get('/share/download/:token', async (c) => {
         resHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
         resHeaders.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
         return new Response(stream, { headers: resHeaders });
-    } catch (e) { return c.text('Error', 500); }
+    } catch (e) { return c.text(`Download Error: ${e.message}`, 500); }
 });
 app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 
@@ -251,9 +249,8 @@ app.get('/', async (c) => {
         await data.createFolder(db, '/', null, user.id);
         root = await data.getRootFolder(db, user.id);
     }
-    if (!root || !root.id) return c.text("Error initializing root", 500);
+    if (!root || !root.id) return c.text("Root folder missing", 500);
     const encryptedId = encrypt(root.id);
-    if (!encryptedId) return c.text("Crypto error", 500);
     return c.redirect(`/view/${encryptedId}`);
 });
 app.get('/fix-root', async (c) => c.redirect('/'));
@@ -261,7 +258,7 @@ app.get('/fix-root', async (c) => c.redirect('/'));
 app.get('/api/folder/:encryptedId', async (c) => {
     const db = c.get('db'); const user = c.get('user'); 
     const folderId = parseInt(decrypt(c.req.param('encryptedId')));
-    if (!folderId) return c.json({ success: false, message: '無效 ID' }, 400);
+    if (!folderId) return c.json({ success: false, message: '无效ID' }, 400);
     try {
         const result = await data.getFolderContents(db, folderId, user.id);
         const pathArr = await data.getFolderPath(db, folderId, user.id);
@@ -299,7 +296,6 @@ app.post('/upload', async (c) => {
             let finalFileName = file.name;
             let existingFile = null;
 
-            // 1. 检查文件名冲突
             if (conflictMode === 'overwrite') {
                 existingFile = await db.get(
                     "SELECT * FROM files WHERE fileName = ? AND folder_id = ? AND user_id = ? AND is_deleted = 0", 
@@ -309,10 +305,8 @@ app.post('/upload', async (c) => {
                 finalFileName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
             }
 
-            // 2. 上传文件到存储
             const uploadResult = await storage.upload(file, finalFileName, file.type, user.id, folderId, config);
             
-            // 3. 更新数据库
             if (existingFile) {
                 await data.updateFile(db, BigInt(existingFile.message_id), {
                     file_id: uploadResult.fileId,
@@ -328,7 +322,6 @@ app.post('/upload', async (c) => {
                     file_id: uploadResult.fileId, thumb_file_id: uploadResult.thumbId || null, date: Date.now()
                 }, folderId, user.id, config.storageMode);
             }
-            
             results.push({ name: finalFileName, success: true });
         } catch (e) { results.push({ name: file.name, success: false, error: e.message }); }
     }
@@ -345,7 +338,7 @@ app.get('/download/proxy/:messageId', async (c) => {
         resHeaders.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
         resHeaders.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
         return new Response(stream, { headers: resHeaders });
-    } catch (e) { return c.text(`Error: ${e.message}`, 500); }
+    } catch (e) { return c.text(`Download Error: ${e.message}`, 500); }
 });
 
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
@@ -374,7 +367,6 @@ app.post('/api/rename', async (c) => {
     else await data.renameFolder(c.get('db'), c.get('storage'), parseInt(id), name, c.get('user').id);
     return c.json({ success: true });
 });
-
 app.post('/api/move', async (c) => {
     const { files, folders, targetFolderId, conflictMode } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
@@ -382,7 +374,6 @@ app.post('/api/move', async (c) => {
     await data.moveItems(c.get('db'), c.get('storage'), (files||[]).map(BigInt), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode || 'rename');
     return c.json({ success: true });
 });
-
 app.get('/api/search', async (c) => c.json(await data.searchItems(c.get('db'), c.req.query('q'), c.get('user').id)));
 app.post('/api/file/save', async (c) => {
     const { id, content } = await c.req.json();
@@ -412,18 +403,42 @@ app.post('/api/folder/lock', async (c) => {
 });
 
 // =================================================================================
-// 7. 管理員路由
+// 7. 管理員路由 (Admin Routes)
 // =================================================================================
-app.get('/api/admin/users', adminMiddleware, async (c) => c.json(await data.listAllUsers(c.get('db'))));
+app.get('/api/admin/users', adminMiddleware, async (c) => {
+    try { return c.json(await data.listAllUsers(c.get('db'))); } 
+    catch(e) { return c.json({success:false, message: e.message}, 500); }
+});
+
 app.get('/api/admin/users-with-quota', adminMiddleware, async (c) => c.json({users: await data.listAllUsersWithQuota(c.get('db'))}));
+
 app.post('/api/admin/storage-mode', adminMiddleware, async (c) => {
-    await c.get('configManager').save({ storageMode: (await c.req.json()).mode });
+    const body = await c.req.json();
+    await c.get('configManager').save({ storageMode: body.mode });
     return c.json({success:true});
 });
-app.get('/api/admin/webdav', adminMiddleware, async(c) => c.json((await c.get('configManager').load()).webdav ? [(await c.get('configManager').load()).webdav] : []));
-app.post('/api/admin/webdav', adminMiddleware, async(c) => { await c.get('configManager').save({webdav: await c.req.json()}); return c.json({success:true}) });
-app.get('/api/admin/s3', adminMiddleware, async(c) => c.json({s3: (await c.get('configManager').load()).s3}));
-app.post('/api/admin/s3', adminMiddleware, async(c) => { await c.get('configManager').save({s3: await c.req.json()}); return c.json({success:true}) });
+
+// 修正：确保 WebDAV 配置能保存
+app.get('/api/admin/webdav', adminMiddleware, async(c) => {
+    const config = await c.get('configManager').load();
+    return c.json(config.webdav ? [config.webdav] : []);
+});
+app.post('/api/admin/webdav', adminMiddleware, async(c) => { 
+    const webdavConfig = await c.req.json();
+    await c.get('configManager').save({webdav: webdavConfig}); 
+    return c.json({success:true}); 
+});
+
+app.get('/api/admin/s3', adminMiddleware, async(c) => {
+    const config = await c.get('configManager').load();
+    return c.json({s3: config.s3});
+});
+app.post('/api/admin/s3', adminMiddleware, async(c) => { 
+    const s3Config = await c.req.json();
+    await c.get('configManager').save({s3: s3Config}); 
+    return c.json({success:true}); 
+});
+
 app.post('/api/admin/scan', adminMiddleware, async (c) => {
     const { userId } = await c.req.json();
     const stream = new ReadableStream({
