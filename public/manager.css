@@ -585,3 +585,57 @@ body {
     text-decoration: none;
     border-radius: 4px;
 }
+/* --- 拖拽上传覆盖层样式 --- */
+
+/* 1. 隐形的全屏感应区：覆盖整个窗口，用于检测拖拽进入 */
+#dropZone {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 990; /* 只要比普通内容高即可，但要比 Overlay 低 */
+    display: none; /* JS 会在拖拽开始时控制它的显示 */
+}
+
+/* 2. 视觉提示层：当拖拽进入感应区时显示 */
+.drop-overlay {
+    display: none; /* 默认隐藏 */
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 123, 255, 0.85); /* 蓝色半透明背景 */
+    z-index: 1000; /* 最顶层 */
+    color: #fff;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    backdrop-filter: blur(2px); /* 磨砂玻璃效果 */
+    transition: opacity 0.2s ease;
+}
+
+/* 提示文字和图标样式 */
+.drop-message {
+    text-align: center;
+    pointer-events: none; /* 让鼠标事件穿透文字，直接触发父容器的 drop */
+}
+
+.drop-message i {
+    font-size: 80px;
+    margin-bottom: 20px;
+    opacity: 0.9;
+}
+
+.drop-message h3 {
+    font-size: 24px;
+    font-weight: 500;
+    margin: 0;
+    letter-spacing: 1px;
+}
+
+/* 3. 防止浏览器默认行为的干扰样式 */
+body.dragging {
+    overflow: hidden; /* 拖拽时防止页面滚动 */
+}
