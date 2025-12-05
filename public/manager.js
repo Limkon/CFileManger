@@ -1,16 +1,20 @@
 // public/manager.js
 
 document.addEventListener('DOMContentLoaded', () => {
+    // =================================================================================
     // 1. 狀態變量與配置
-    let currentFolderId = null; 
-    let currentPath = [];       
-    let items = [];             
-    let selectedItems = new Set(); 
-    let isMultiSelectMode = false; 
-    let viewMode = localStorage.getItem('viewMode') || 'grid'; 
-    let isTrashMode = false;
+    // =================================================================================
+    let currentFolderId = null; // 當前資料夾的加密 ID
+    let currentPath = [];       // 麵包屑導航數據
+    let items = [];             // 當前資料夾內容緩存
+    let selectedItems = new Set(); // 選中的項目 ID (格式: "file:123" 或 "folder:456")
+    let isMultiSelectMode = false; // 多選模式標記
+    let viewMode = localStorage.getItem('viewMode') || 'grid'; // 視圖模式: 'grid' | 'list'
+    let isTrashMode = false; // 回收站模式標記
 
+    // =================================================================================
     // 2. DOM 元素引用
+    // =================================================================================
     const itemGrid = document.getElementById('itemGrid');
     const itemListView = document.getElementById('itemListView');
     const itemListBody = document.getElementById('itemListBody');
@@ -72,17 +76,25 @@ document.addEventListener('DOMContentLoaded', () => {
     const modalContent = document.getElementById('modalContent');
     const closePreviewBtn = document.querySelector('#previewModal .close-button');
 
+    // =================================================================================
     // 3. 初始化邏輯
+    // =================================================================================
+    
+    // 解析 URL 獲取當前資料夾 ID (路徑格式: /view/:encryptedId)
     const pathParts = window.location.pathname.split('/');
     if (pathParts[1] === 'view' && pathParts[2] && pathParts[2] !== 'null') {
         currentFolderId = pathParts[2];
     }
 
+    // 應用視圖設置並加載數據
     updateViewModeUI();
     loadFolder(currentFolderId);
     updateQuota();
 
+    // =================================================================================
     // 4. 核心數據加載與渲染
+    // =================================================================================
+
     async function loadFolder(encryptedId) {
         if (!encryptedId && !isTrashMode) return;
         
@@ -298,7 +310,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    // 統一處理右鍵事件 (綁定到整個 main-content 區域)
+    // 統一處理右鍵事件
     document.querySelector('.main-content').addEventListener('contextmenu', (e) => {
         e.preventDefault();
         
@@ -405,7 +417,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // 6. 按鈕邏輯
-    // 新建文件夾 (右鍵)
+    // 新建文件夾
     ctxCreateFolderBtn.addEventListener('click', async () => {
         const name = prompt('請輸入新文件夾名稱:');
         if (name && name.trim()) {
@@ -416,22 +428,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 新建文本文件 (右鍵)
+    // 新建文本文件
     ctxCreateFileBtn.addEventListener('click', async () => {
         const filename = prompt('請輸入文件名 (例如: note.txt):', 'new_file.txt');
         if (!filename || !filename.trim()) return;
+        
+        // 創建空文件上傳
         const emptyFile = new File([""], filename.trim(), { type: "text/plain" });
-        const formData = new FormData();
-        formData.append('files', emptyFile);
-        try {
-            await axios.post(`/upload?folderId=${currentFolderId || ''}`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
-            await loadFolder(currentFolderId);
-        } catch (error) { alert('創建失敗'); }
+        await executeUpload([emptyFile], currentFolderId);
     });
 
-    // 編輯文件 (右鍵)
+    // 編輯文件
     editBtn.addEventListener('click', () => {
         if (selectedItems.size !== 1) return;
         const idStr = Array.from(selectedItems)[0];
@@ -445,7 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    // 刪除按鈕 (通用)
+    // 刪除按鈕
     document.getElementById('deleteBtn').addEventListener('click', async () => {
         if (selectedItems.size === 0) return;
         if (isTrashMode) {
@@ -468,7 +475,7 @@ document.addEventListener('DOMContentLoaded', () => {
         catch (error) { alert('還原失敗'); }
     });
 
-    // 永久刪除按鈕
+    // 永久刪除
     deleteForeverBtn.addEventListener('click', async () => {
         if (selectedItems.size === 0) return alert('請先選擇要刪除的項目');
         if (!confirm('確定要永久刪除嗎？此操作無法撤銷！')) return;
@@ -630,29 +637,143 @@ document.addEventListener('DOMContentLoaded', () => {
     copyLinkBtn.addEventListener('click', () => navigator.clipboard.writeText(copyLinkBtn.dataset.link).then(() => alert('已複製')));
     closeShareModalBtn.onclick = cancelShareBtn.onclick = () => shareModal.style.display = 'none';
 
-    // Upload
-    document.getElementById('showUploadModalBtn').addEventListener('click', () => uploadModal.style.display = 'block');
-    document.getElementById('closeUploadModalBtn').addEventListener('click', () => uploadModal.style.display = 'none');
+    // =================================================================================
+    // 9. 上傳功能 (封裝為通用函數)
+    // =================================================================================
+
+    // 通用上傳執行函數
+    async function executeUpload(files, targetEncryptedId) {
+        if (!files || files.length === 0) return alert('請選擇至少一個文件');
+        
+        // 如果沒有指定目標ID，使用當前ID；如果當前ID為空（如根目錄錯誤），則留空由後端處理默認
+        const folderId = targetEncryptedId || currentFolderId;
+        
+        const formData = new FormData();
+        
+        // 處理文件列表 (Array 或 FileList)
+        // 為了防止同名覆蓋，如果文件有 path 屬性 (webkitRelativePath)，可以考慮追加到文件名
+        // 這裡暫時簡單處理
+        let fileCount = 0;
+        if (files instanceof FileList) {
+            for(let i=0; i<files.length; i++) { formData.append('files', files[i]); fileCount++; }
+        } else if (Array.isArray(files)) {
+            files.forEach(f => { formData.append('files', f); fileCount++; });
+        } else {
+            // 單個文件
+            formData.append('files', files);
+            fileCount = 1;
+        }
+
+        if (fileCount === 0) return;
+
+        // 顯示進度條
+        if(uploadModal.style.display === 'none') {
+            // 如果是拖拽觸發，可以選擇顯示模態框或者只顯示全局加載
+            // 這裡簡單復用模態框裡的進度條
+            uploadModal.style.display = 'block';
+            // 隱藏選擇框，只顯示進度
+            document.getElementById('uploadForm').style.display = 'none';
+        }
+        
+        progressArea.style.display = 'block';
+        progressBar.style.width = '0%';
+        progressBar.textContent = '0%';
+        
+        try {
+            const res = await axios.post(`/upload?folderId=${folderId || ''}`, formData, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+                onUploadProgress: (p) => {
+                    const percent = Math.round((p.loaded * 100) / p.total);
+                    progressBar.style.width = percent + '%';
+                    progressBar.textContent = percent + '%';
+                }
+            });
+            
+            // 成功處理
+            // alert('上傳成功'); // 可選：拖拽時頻繁彈窗可能不友好
+            console.log('上傳結果:', res.data);
+            
+            // 延遲關閉模態框
+            setTimeout(() => {
+                uploadModal.style.display = 'none';
+                document.getElementById('uploadForm').style.display = 'block'; // 恢復表單顯示
+                uploadForm.reset();
+                progressArea.style.display = 'none';
+                
+                // 刷新視圖
+                loadFolder(currentFolderId);
+                updateQuota();
+            }, 500);
+            
+        } catch (error) {
+            alert('上傳失敗: ' + (error.response?.data?.message || error.message));
+            progressArea.style.display = 'none';
+            uploadModal.style.display = 'none';
+            document.getElementById('uploadForm').style.display = 'block';
+        }
+    }
+
+    // 按鈕觸發上傳
+    document.getElementById('showUploadModalBtn').addEventListener('click', () => {
+        uploadModal.style.display = 'block';
+        document.getElementById('uploadForm').style.display = 'block';
+        progressArea.style.display = 'none';
+        updateFolderSelectForUpload([]); // 更新文件夾列表
+    });
+    
+    document.getElementById('closeUploadModalBtn').addEventListener('click', () => {
+        uploadModal.style.display = 'none';
+    });
+    
+    // 表單提交上傳
     uploadForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        const allFiles = [...fileInput.files, ...folderInput.files];
-        if (allFiles.length === 0) return alert('請選擇文件');
-        const targetEncryptedId = folderSelect.value || currentFolderId;
-        const formData = new FormData();
-        allFiles.forEach(f => formData.append('files', f));
-        progressArea.style.display = 'block'; progressBar.style.width = '0%'; progressBar.textContent = '0%';
-        try {
-            await axios.post(`/upload?folderId=${targetEncryptedId}`, formData, {
-                headers: { 'Content-Type': 'multipart/form-data' },
-                onUploadProgress: (p) => { const percent = Math.round((p.loaded * 100) / p.total); progressBar.style.width = percent + '%'; progressBar.textContent = percent + '%'; }
-            });
-            alert('上傳成功'); uploadModal.style.display = 'none'; uploadForm.reset(); progressArea.style.display = 'none';
-            loadFolder(currentFolderId); updateQuota();
-        } catch (error) { alert('上傳失敗'); progressArea.style.display = 'none'; }
+        const rawFiles = [...fileInput.files, ...folderInput.files];
+        const targetEncryptedId = folderSelect.value;
+        await executeUpload(rawFiles, targetEncryptedId);
     });
+
+    // 拖拽上傳
+    dropZone.addEventListener('dragover', (e) => { 
+        e.preventDefault(); 
+        dropZoneOverlay.style.display = 'flex'; 
+    });
+    
+    dropZone.addEventListener('dragleave', (e) => { 
+        e.preventDefault(); 
+        // 只有當離開的是 overlay 本身時才隱藏（防止進入子元素時閃爍）
+        if (e.target === dropZone || e.target === dropZoneOverlay) {
+             dropZoneOverlay.style.display = 'none'; 
+        }
+    });
+    
+    // 監聽 Overlay 上的 Drop 事件
+    dropZoneOverlay.addEventListener('dragover', (e) => e.preventDefault());
+    dropZoneOverlay.addEventListener('dragleave', (e) => {
+        if (e.target === dropZoneOverlay) dropZoneOverlay.style.display = 'none';
+    });
+    dropZoneOverlay.addEventListener('drop', async (e) => { 
+        e.preventDefault(); 
+        dropZoneOverlay.style.display = 'none'; 
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            await executeUpload(files, currentFolderId);
+        }
+    });
+
     function updateFolderSelectForUpload(folders) {
+        // 這裡可以重新獲取所有文件夾填充下拉框
         folderSelect.innerHTML = `<option value="${currentFolderId}">當前文件夾</option>`;
-        if (folders) folders.forEach(f => { const op = document.createElement('option'); op.value = f.encrypted_id; op.textContent = f.name; folderSelect.appendChild(op); });
+        // 若 items 中包含文件夾，可以填充進去
+        items.forEach(item => {
+            if(item.type === 'folder') {
+                const op = document.createElement('option');
+                op.value = item.encrypted_id;
+                op.textContent = item.name;
+                folderSelect.appendChild(op);
+            }
+        });
     }
 
     document.getElementById('logoutBtn').addEventListener('click', () => window.location.href = '/logout');
@@ -667,9 +788,6 @@ document.addEventListener('DOMContentLoaded', () => {
         else { items.forEach(item => selectedItems.add(getItemId(item))); document.querySelectorAll('.item-card, .list-item').forEach(el => el.classList.add('selected')); }
         updateContextMenuState(true); contextMenu.style.display = 'none';
     });
-    dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZoneOverlay.style.display = 'flex'; });
-    dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZoneOverlay.style.display = 'none'; });
-    dropZone.addEventListener('drop', (e) => { e.preventDefault(); dropZoneOverlay.style.display = 'none'; alert('請使用上傳按鈕'); });
 
     function getItemId(item) { return item.type === 'file' ? `file:${item.message_id}` : `folder:${item.id}`; }
     function parseItemId(str) { const p = str.split(':'); return [p[0], p[1]]; }
