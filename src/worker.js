@@ -373,6 +373,10 @@ app.get('/', async (c) => {
     const db = c.get('db');
     const user = c.get('user');
     
+    // ★★★ 雙重保險：顯式初始化加密模塊 ★★★
+    // 即使中間件失效，這裡也能保證密鑰存在，防止 "Root ID 無法加密" 錯誤
+    initCrypto(c.env.SESSION_SECRET);
+
     // 1. 嘗試獲取根目錄
     let root = await data.getRootFolder(db, user.id);
     
@@ -403,9 +407,6 @@ app.get('/', async (c) => {
     
     return c.redirect(`/view/${encryptedId}`);
 });
-
-// 手動修復接口 (備用)
-app.get('/fix-root', async (c) => c.redirect('/'));
 
 // 獲取文件夾內容
 app.get('/api/folder/:encryptedId', async (c) => {
