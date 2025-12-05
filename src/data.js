@@ -1,7 +1,3 @@
-{
-type: uploaded file
-fileName: limkon/cfilemanger/CFileManger-628f1ebbb4936b82ef613f3eb2f30b8e37290086/src/data.js
-fullContent:
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from './crypto.js';
@@ -177,20 +173,13 @@ export async function getFilesByIds(db, messageIds, userId) {
 // --- 文件夹与路径 ---
 
 export async function createFolder(db, name, parentId, userId) {
-    // 文件夹创建也应该检查重名，但由于表结构有 UNIQUE 约束，这里使用 try-catch 处理或者预检查
-    // 为了保持一致性，我们尝试预先获取唯一名称（如果是自动重命名逻辑），
-    // 但 createFolder 通常由用户直接发起命名，如果重名通常希望报错提示，而不是自动 (1)。
-    // 这里的逻辑保持原样，如果需要自动重命名，可以在调用前使用 getUniqueName。
-    
     const sql = `INSERT INTO folders (name, parent_id, user_id) VALUES (?, ?, ?)`;
     try {
         const result = await db.run(sql, [name, parentId, userId]);
         
-        // 关键修复：确保获取到 ID。如果 last_row_id 不存在，则手动查询。
         let newId = result?.meta?.last_row_id;
         
         if (!newId) {
-            // 回退方案：根据名称和父ID反查
             let querySql = "";
             let params = [];
             if (parentId === null) {
@@ -206,7 +195,7 @@ export async function createFolder(db, name, parentId, userId) {
         
         return { success: true, id: newId };
     } catch (err) {
-        // 处理同名文件夹：如果存在且已删除，则恢复
+        // 处理同名文件夹
         if (err.message && err.message.includes('UNIQUE')) {
             let row;
             if (parentId === null) {
@@ -220,7 +209,6 @@ export async function createFolder(db, name, parentId, userId) {
                     await db.run("UPDATE folders SET is_deleted = 0 WHERE id = ?", [row.id]);
                     return { success: true, id: row.id, restored: true };
                 } else {
-                    // 如果未删除且存在，这里抛出错误，前端可以捕获并提示
                     throw new Error('文件夹已存在');
                 }
             }
@@ -500,18 +488,39 @@ export async function setFolderPassword(db, folderId, password, userId) {
     return { success: true };
 }
 
-// --- 移动逻辑 (重构：支持验重) ---
+// --- 移动逻辑 (增强版：支持冲突解决模式) ---
 
-export async function moveItems(db, storage, fileIds = [], folderIds = [], targetFolderId, userId) {
+export async function moveItems(db, storage, fileIds = [], folderIds = [], targetFolderId, userId, conflictMode = 'rename') {
     // 处理文件
     for (const fileId of fileIds) {
         const file = await db.get("SELECT fileName FROM files WHERE message_id = ? AND user_id = ?", [fileId.toString(), userId]);
         if (file) {
-            // 获取唯一名称
-            const uniqueName = await getUniqueName(db, targetFolderId, file.fileName, userId, 'file');
+            let finalName = file.fileName;
+            
+            // 检查目标文件夹是否存在同名文件
+            const existing = await db.get(
+                "SELECT message_id FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND is_deleted = 0", 
+                [targetFolderId, file.fileName, userId]
+            );
+
+            if (existing) {
+                if (conflictMode === 'overwrite') {
+                    // 覆盖模式：删除目标位置的旧文件（软删除）
+                    await db.run("UPDATE files SET is_deleted = 1, deleted_at = ? WHERE message_id = ? AND user_id = ?", [Date.now(), existing.message_id, userId]);
+                    // finalName 保持原名，直接移动过去
+                } else if (conflictMode === 'skip') {
+                    // 跳过模式：不做任何操作
+                    continue; 
+                } else {
+                    // 重命名模式 (默认)
+                    finalName = await getUniqueName(db, targetFolderId, file.fileName, userId, 'file');
+                }
+            }
+            
+            // 执行移动
             await db.run(
                 "UPDATE files SET folder_id = ?, fileName = ? WHERE message_id = ? AND user_id = ?", 
-                [targetFolderId, uniqueName, fileId.toString(), userId]
+                [targetFolderId, finalName, fileId.toString(), userId]
             );
         }
     }
@@ -522,7 +531,7 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
         
         const folder = await db.get("SELECT name FROM folders WHERE id = ? AND user_id = ?", [folderId, userId]);
         if (folder) {
-            // 获取唯一名称
+            // 文件夹暂只支持重命名逻辑，避免合并复杂性
             const uniqueName = await getUniqueName(db, targetFolderId, folder.name, userId, 'folder');
             await db.run(
                 "UPDATE folders SET parent_id = ?, name = ? WHERE id = ? AND user_id = ?", 
@@ -534,16 +543,12 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
 }
 
 export async function renameFile(db, storage, messageId, newFileName, userId) {
-    // 重命名也应该检查重名，但这里为了简单，假设用户手动重命名时如果重名会收到数据库错误(虽然files表没有唯一约束)
-    // 更好的做法是调用 getUniqueName 或抛出异常。
-    // 但这里保持原有逻辑简单更新，如果需要可以加上 check。
     const result = await db.run(`UPDATE files SET fileName = ? WHERE message_id = ? AND user_id = ?`, [newFileName, messageId.toString(), userId]);
     if (result.meta.changes === 0) throw new Error('文件未找到');
     return { success: true };
 }
 
 export async function renameFolder(db, storage, folderId, newFolderName, userId) {
-    // 文件夹表有 UNIQUE(name, parent_id, user_id) 约束，所以重名会自动抛出错误，前端捕获即可。
     const result = await db.run(`UPDATE folders SET name = ? WHERE id = ? AND user_id = ?`, [newFolderName, folderId, userId]);
     if (result.meta.changes === 0) throw new Error('文件夹未找到');
     return { success: true };
@@ -595,5 +600,4 @@ export async function scanStorageAndImport(db, storage, userId, controller) {
         }
         log(`扫描完成。新增导入 ${importedCount} 个文件。`);
     } catch (e) { log(`扫描过程发生错误: ${e.message}`); }
-}
 }
