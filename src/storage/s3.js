@@ -37,13 +37,10 @@ export default class S3Storage {
      * @param {string} fileName 
      * @param {string} type 
      * @param {number} userId 
-     * @param {number} folderId 
-     * @param {object} config 
-     * @param {string} folderPath - 相对路径 (例如 "Docs/Work/")
      */
-    async upload(fileStream, fileName, type, userId, folderId, config, folderPath = '') {
-        // 构造物理存储路径: userId/Folder/SubFolder/fileName
-        const key = `${userId}/${folderPath}${fileName}`;
+    async upload(fileStream, fileName, type, userId) {
+        // 构造存储路径: userId/fileName
+        const key = `${userId}/${fileName}`;
         const normalizedKey = this._normalizeKey(key);
         const url = `${this.bucketUrl}/${encodeURIComponent(normalizedKey)}`;
 
@@ -66,28 +63,8 @@ export default class S3Storage {
     }
 
     /**
-     * 创建物理文件夹 (创建一个以 / 结尾的空对象)
-     * 这样在 S3 浏览器中也能看到目录结构
-     */
-    async createDir(folderPath, userId) {
-        // folderPath 例如 "MyDocs/Work/"
-        const key = `${userId}/${folderPath}`; 
-        
-        // 确保以 / 结尾
-        const safeKey = key.endsWith('/') ? key : key + '/';
-        const normalizedKey = this._normalizeKey(safeKey);
-        
-        const url = `${this.bucketUrl}/${encodeURIComponent(normalizedKey)}`;
-        
-        // 上传 0 字节内容
-        await this.client.fetch(url, {
-            method: 'PUT',
-            body: ''
-        });
-    }
-
-    /**
      * 下载文件
+     * @param {string} fileId 
      */
     async download(fileId) {
         const normalizedKey = this._normalizeKey(fileId);
@@ -114,15 +91,14 @@ export default class S3Storage {
 
     /**
      * 删除文件或文件夹
+     * @param {Array} files 
+     * @param {Array} folders 
      */
     async remove(files, folders) {
         const items = [...(files || [])];
         
-        // S3 删除文件夹比较麻烦(需要清空内容)，且我们是逻辑删除优先
-        // 这里主要负责物理删除文件对象
-        
         const deletePromises = items.map(async (item) => {
-            const fileId = item.file_id; 
+            const fileId = item.file_id || item.path; // 兼容逻辑
             if (!fileId) return;
 
             const normalizedKey = this._normalizeKey(fileId);
@@ -139,13 +115,38 @@ export default class S3Storage {
     }
 
     /**
-     * 移动文件
-     * S3 不支持原生的重命名/移动目录操作 (需要 Copy + Delete 所有子对象)
-     * 为了性能和稳定性，S3 模式下仅更新数据库路径，不进行物理移动
+     * 移动文件 (Copy + Delete)
+     * @param {string} oldPath 
+     * @param {string} newPath 
      */
     async moveFile(oldPath, newPath) {
-        // 留空，由 data.js 逻辑控制跳过
-        return;
+        const sourceKey = this._normalizeKey(oldPath);
+        const destKey = this._normalizeKey(newPath);
+
+        // 1. Copy Object
+        const copySource = `/${this.bucket}/${sourceKey}`; 
+        const destUrl = `${this.bucketUrl}/${encodeURIComponent(destKey)}`;
+        
+        const copySourceHeader = encodeURI(copySource);
+
+        const copyRes = await this.client.fetch(destUrl, {
+            method: 'PUT',
+            headers: {
+                'x-amz-copy-source': copySourceHeader
+            }
+        });
+
+        if (!copyRes.ok) {
+            throw new Error(`S3 移动(复制)失败: ${copyRes.status} ${copyRes.statusText}`);
+        }
+
+        // 2. Delete Old Object
+        const oldUrl = `${this.bucketUrl}/${encodeURIComponent(sourceKey)}`;
+        const delRes = await this.client.fetch(oldUrl, { method: 'DELETE' });
+
+        if (!delRes.ok) {
+            console.warn(`S3 移动(删除旧文件)失败，可能产生了残留文件: ${oldPath}`);
+        }
     }
 
     /**
@@ -160,10 +161,10 @@ export default class S3Storage {
 
         const response = await this.client.fetch(url, { method: 'GET' });
         if (!response.ok) {
-            // 尝试 V1 兼容
+            // 尝试 V1
             const v1Url = `${this.bucketUrl}?prefix=${encodeURIComponent(normalizedPrefix)}`;
             const v1Response = await this.client.fetch(v1Url, { method: 'GET' });
-            if (!v1Response.ok) return []; // 失败或是空桶，返回空数组
+            if (!v1Response.ok) throw new Error(`S3 List 失败: ${response.status}`);
             return await this._parseListXml(await v1Response.text());
         }
 
@@ -185,15 +186,11 @@ export default class S3Storage {
             const sizeMatch = contentBody.match(/<Size>(\d+)<\/Size>/);
             
             if (keyMatch) {
-                const key = keyMatch[1];
-                // 忽略以 / 结尾的文件夹占位符，只导入文件
-                if (!key.endsWith('/')) {
-                    contents.push({
-                        fileId: key, 
-                        size: sizeMatch ? parseInt(sizeMatch[1]) : 0,
-                        updatedAt: Date.now() // 简化处理
-                    });
-                }
+                contents.push({
+                    fileId: keyMatch[1], // Key
+                    size: sizeMatch ? parseInt(sizeMatch[1]) : 0,
+                    updatedAt: Date.now() // 简化处理
+                });
             }
         }
         
