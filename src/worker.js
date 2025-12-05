@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from 'hono/cloudflare-workers';
-// 必須導入 manifest，這是 Wrangler 在構建時生成的資源清單
 import manifest from '__STATIC_CONTENT_MANIFEST';
 
 import Database from './database.js';
@@ -13,36 +12,68 @@ import { initCrypto, encrypt, decrypt } from './crypto.js';
 const app = new Hono();
 
 // =================================================================================
+// 全局错误处理 (新增：显示具体错误信息)
+// =================================================================================
+app.onError((err, c) => {
+    console.error('Server Error:', err);
+    return c.text(`❌ 系统严重错误 (Internal Server Error):\n\n${err.message}\n\nStack:\n${err.stack}`, 500);
+});
+
+// =================================================================================
 // 0. 靜態資源服務 (優先處理)
 // =================================================================================
-
-// 1. 通用靜態資源 (CSS, JS, Fonts, Images)
 app.use('/*', serveStatic({ root: './', manifest }));
-
-// 2. 特定頁面路由重寫
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
 app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
 app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
-
-// 當用戶訪問 /view/xxx 時，返回 manager.html (前端單頁應用)
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
-
 
 // =================================================================================
 // 1. 全局中間件：注入 DB, Config, Storage, Crypto
 // =================================================================================
 app.use('*', async (c, next) => {
-    initCrypto(c.env.SESSION_SECRET);
-    const db = new Database(c.env.DB);
-    c.set('db', db);
-    const configManager = new ConfigManager(c.env.CONFIG_KV);
-    c.set('configManager', configManager);
-    const config = await configManager.load();
-    c.set('config', config);
-    const storage = initStorage(config, c.env); 
-    c.set('storage', storage);
-    await next();
+    try {
+        // 检查环境变量是否缺失
+        if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)。请检查 wrangler.toml。");
+        if (!c.env.CONFIG_KV) throw new Error("缺少 KV 命名空间绑定 (CONFIG_KV)。请检查 wrangler.toml。");
+        if (!c.env.SESSION_SECRET) throw new Error("缺少环境变量 SESSION_SECRET。");
+
+        initCrypto(c.env.SESSION_SECRET);
+        
+        const db = new Database(c.env.DB);
+        c.set('db', db);
+
+        const configManager = new ConfigManager(c.env.CONFIG_KV);
+        c.set('configManager', configManager);
+
+        const config = await configManager.load();
+        c.set('config', config);
+
+        // 尝试初始化存储后端
+        try {
+            const storage = initStorage(config, c.env); 
+            c.set('storage', storage);
+        } catch (storageErr) {
+            console.error("Storage Init Failed:", storageErr);
+            // 如果是 API 请求，返回 JSON 错误
+            if (c.req.path.startsWith('/api')) {
+                return c.json({ success: false, message: `存储后端初始化失败: ${storageErr.message}` }, 500);
+            }
+            // 否则允许继续，也许用户是去 /setup 或 /admin 修复配置
+            // 但如果后续路由用到 storage，会再次报错
+            c.set('storage', { 
+                list: async () => [], 
+                upload: async () => { throw new Error("存储未配置"); },
+                download: async () => { throw new Error("存储未配置"); },
+                remove: async () => { throw new Error("存储未配置"); }
+            });
+        }
+
+        await next();
+    } catch (e) {
+        throw e; // 抛给 app.onError 处理
+    }
 });
 
 // =================================================================================
@@ -156,7 +187,6 @@ app.get('/logout', async (c) => {
 // =================================================================================
 // 4. 分享功能
 // =================================================================================
-// ... (省略 SHARE_HTML 常量，與之前保持一致，節省篇幅)
 const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加載...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加載失敗');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>錯誤</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密碼保護</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="請輸入密碼" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解鎖</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>時間: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下載文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夾)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
 
 app.get('/api/public/share/:token', async (c) => {
@@ -243,12 +273,12 @@ app.get('/api/folders', async (c) => {
     try { return c.json(await data.getAllFolders(c.get('db'), c.get('user').id)); } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 上传接口：增加 conflictMode 支持
+// 上传接口
 app.post('/upload', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user'); const config = c.get('config');
     const body = await c.req.parseBody(); 
     const folderId = parseInt(decrypt(c.req.query('folderId')));
-    const conflictMode = c.req.query('conflictMode') || 'rename'; // rename | overwrite
+    const conflictMode = c.req.query('conflictMode') || 'rename'; 
     
     if (isNaN(folderId)) return c.json({ success: false, message: 'Invalid folderId' }, 400);
 
@@ -275,18 +305,15 @@ app.post('/upload', async (c) => {
                     "SELECT * FROM files WHERE fileName = ? AND folder_id = ? AND user_id = ? AND is_deleted = 0", 
                     [file.name, folderId, user.id]
                 );
-                // 如果是 overwrite 且文件存在，finalFileName 保持原名
             } else {
-                // rename 模式或文件不存在：获取唯一名
                 finalFileName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
             }
 
-            // 2. 上传文件到存储 (路径使用 finalFileName)
+            // 2. 上传文件到存储
             const uploadResult = await storage.upload(file, finalFileName, file.type, user.id, folderId, config);
             
             // 3. 更新数据库
             if (existingFile) {
-                // 覆盖：更新旧记录
                 await data.updateFile(db, BigInt(existingFile.message_id), {
                     file_id: uploadResult.fileId,
                     size: file.size,
@@ -295,7 +322,6 @@ app.post('/upload', async (c) => {
                     thumb_file_id: uploadResult.thumbId || null
                 }, user.id);
             } else {
-                // 新增：插入新记录
                 const messageId = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
                 await data.addFile(db, {
                     message_id: messageId, fileName: finalFileName, mimetype: file.type, size: file.size,
@@ -349,12 +375,10 @@ app.post('/api/rename', async (c) => {
     return c.json({ success: true });
 });
 
-// 移动接口：增加 conflictMode 支持 (传递给 data 层)
 app.post('/api/move', async (c) => {
     const { files, folders, targetFolderId, conflictMode } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
-    // 注意：需要 data.js 中的 moveItems 支持 conflictMode 参数，如果未修改 data.js，此参数将被忽略
     await data.moveItems(c.get('db'), c.get('storage'), (files||[]).map(BigInt), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode || 'rename');
     return c.json({ success: true });
 });
