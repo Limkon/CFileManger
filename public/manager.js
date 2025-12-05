@@ -1,25 +1,6 @@
 // public/manager.js
 
 document.addEventListener('DOMContentLoaded', () => {
-    // =================================================================================
-    // 0. 全局配置与拦截器 (新增)
-    // =================================================================================
-    
-    // 处理 401/403 错误，自动跳转登录
-    axios.interceptors.response.use(
-        response => response,
-        error => {
-            if (error.response && (error.response.status === 401 || error.response.status === 403)) {
-                // 防止无限循环跳转，只在非登录页跳转
-                if (!window.location.pathname.includes('/login')) {
-                    alert('会话已过期，请重新登录');
-                    window.location.href = '/login';
-                }
-            }
-            return Promise.reject(error);
-        }
-    );
-
     // 1. 状态变量与配置
     let currentFolderId = null; 
     let currentPath = [];       
@@ -96,7 +77,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const closePreviewBtn = document.querySelector('#previewModal .close-button');
 
     // =================================================================================
-    // 状态栏管理器
+    // 状态栏管理器 (新增)
     // =================================================================================
     const TaskManager = {
         timer: null,
@@ -619,66 +600,6 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { alert('操作失败'); }
     });
 
-    // --- 分享功能逻辑 ---
-    const shareBtn = document.getElementById('shareBtn');
-    if (shareBtn) {
-        shareBtn.addEventListener('click', () => {
-            if (selectedItems.size !== 1) return;
-            document.getElementById('shareOptions').style.display = 'block';
-            document.getElementById('shareResult').style.display = 'none';
-            sharePasswordInput.value = '';
-            expiresInSelect.value = '24h';
-            customExpiresInput.style.display = 'none';
-            customExpiresInput.value = '';
-            shareModal.style.display = 'block';
-        });
-    }
-
-    if (expiresInSelect) {
-        expiresInSelect.addEventListener('change', () => {
-            customExpiresInput.style.display = expiresInSelect.value === 'custom' ? 'block' : 'none';
-        });
-    }
-
-    const hideShareModal = () => { shareModal.style.display = 'none'; };
-    if (closeShareModalBtn) closeShareModalBtn.addEventListener('click', hideShareModal);
-    if (cancelShareBtn) cancelShareBtn.addEventListener('click', hideShareModal);
-
-    if (confirmShareBtn) {
-        confirmShareBtn.addEventListener('click', async () => {
-            if (selectedItems.size !== 1) return;
-            const idStr = Array.from(selectedItems)[0];
-            const [type, id] = parseItemId(idStr);
-            const expiresIn = expiresInSelect.value;
-            const password = sharePasswordInput.value;
-            let customExpiresAt = null;
-            if (expiresIn === 'custom') {
-                const dateVal = customExpiresInput.value;
-                if (!dateVal) return alert('请选择自定义的过期时间');
-                customExpiresAt = new Date(dateVal).getTime();
-            }
-            try {
-                confirmShareBtn.disabled = true;
-                confirmShareBtn.textContent = '生成中...';
-                const res = await axios.post('/api/share/create', { itemId: id, itemType: type, expiresIn: expiresIn, password: password, customExpiresAt: customExpiresAt });
-                if (res.data.success) {
-                    document.getElementById('shareOptions').style.display = 'none';
-                    document.getElementById('shareResult').style.display = 'block';
-                    const fullLink = window.location.origin + res.data.link;
-                    shareLinkContainer.textContent = fullLink;
-                    copyLinkBtn.onclick = () => {
-                        navigator.clipboard.writeText(fullLink).then(() => {
-                            const originalText = copyLinkBtn.textContent;
-                            copyLinkBtn.textContent = '已复制!';
-                            copyLinkBtn.style.backgroundColor = '#28a745';
-                            setTimeout(() => { copyLinkBtn.textContent = originalText; copyLinkBtn.style.backgroundColor = ''; }, 2000);
-                        }).catch(() => alert('复制失败，请手动复制'));
-                    };
-                }
-            } catch (error) { alert('创建分享失败: ' + (error.response?.data?.message || error.message)); } finally { confirmShareBtn.disabled = false; confirmShareBtn.textContent = '生成链接'; }
-        });
-    }
-
     viewSwitchBtn.addEventListener('click', () => {
         viewMode = viewMode === 'grid' ? 'list' : 'grid';
         localStorage.setItem('viewMode', viewMode);
@@ -711,7 +632,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // =================================================================================
-    // 9. 上传功能 (修复版：移除 Content-Type 头并增加返回值检查)
+    // 9. 上传功能 (增强版：支持递归目录创建 + 状态栏)
     // =================================================================================
 
     async function getFolderContents(encryptedId) {
@@ -888,9 +809,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
             try {
                 let currentFileLoaded = 0;
-                // ============ 关键修复 ============
-                // 不手动设置 Content-Type，让浏览器自动生成带 boundary 的头
-                const res = await axios.post(`/upload?folderId=${targetFolderId || ''}`, formData, {
+                await axios.post(`/upload?folderId=${targetFolderId || ''}`, formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' },
                     onUploadProgress: (p) => {
                         const diff = p.loaded - currentFileLoaded;
                         currentFileLoaded = p.loaded;
@@ -903,15 +823,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                     }
                 });
-
-                // 检查后端返回的详细结果，防止假成功
-                if (res.data.results && Array.isArray(res.data.results)) {
-                    const failedItem = res.data.results.find(r => !r.success);
-                    if (failedItem) {
-                        throw new Error(failedItem.error || '上传被后端拒绝');
-                    }
-                }
-                
                 successCount++;
             } catch (error) {
                 console.error(`上传失败: ${file.name}`, error);
@@ -923,7 +834,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 结果处理
         let resultMsg = `上传结束。\n成功: ${successCount}\n失败: ${failCount}`;
         if (failCount > 0) {
-            resultMsg += '\n\n错误详情:\n' + errors.join('\n').slice(0, 300) + '...';
+            resultMsg += '\n\n错误详情:\n' + errors.join('\n').slice(0, 200) + '...';
             alert(resultMsg);
             TaskManager.error('部分上传失败');
         } else {
