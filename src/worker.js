@@ -1,3 +1,7 @@
+{
+type: uploaded file
+fileName: limkon/cfilemanger/CFileManger-628f1ebbb4936b82ef613f3eb2f30b8e37290086/src/worker.js
+fullContent:
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from 'hono/cloudflare-workers';
@@ -368,38 +372,25 @@ app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 // =================================================================================
 
 // 根目錄自動修復路由
-// 如果用戶訪問首頁時數據庫中的根目錄丟失或 ID 為空，這裡會自動修復
 app.get('/', async (c) => {
     const db = c.get('db');
     const user = c.get('user');
     
-    // ★★★ 雙重保險：顯式初始化加密模塊 ★★★
-    // 即使中間件失效，這裡也能保證密鑰存在，防止 "Root ID 無法加密" 錯誤
     initCrypto(c.env.SESSION_SECRET);
 
-    // 1. 嘗試獲取根目錄
     let root = await data.getRootFolder(db, user.id);
     
-    // 2. 自動修復邏輯：如果根目錄不存在，或者 ID 是無效的（壞數據）
     if (!root || !root.id) {
         console.log(`[Auto-Fix] Root folder for user ${user.id} is missing or invalid. Fixing...`);
-        
-        // 物理刪除可能存在的壞記錄
         await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
-        
-        // 重新創建一個全新的根目錄
         await data.createFolder(db, '/', null, user.id);
-        
-        // 再次查詢確認
         root = await data.getRootFolder(db, user.id);
     }
     
-    // 3. 安全檢查
     if (!root || !root.id) {
         return c.text(`❌ 嚴重錯誤: 無法創建或獲取根目錄。\nUser ID: ${user.id}\n請檢查數據庫連接。`, 500);
     }
     
-    // 4. 正常跳轉
     const encryptedId = encrypt(root.id);
     if (!encryptedId) {
         return c.text(`❌ 加密失敗: Root ID (${root.id}) 無法加密。請檢查 SESSION_SECRET 配置。`, 500);
@@ -408,7 +399,6 @@ app.get('/', async (c) => {
     return c.redirect(`/view/${encryptedId}`);
 });
 
-// 手動修復接口 (備用)
 app.get('/fix-root', async (c) => c.redirect('/'));
 
 // 獲取文件夾內容
@@ -424,18 +414,17 @@ app.get('/api/folder/:encryptedId', async (c) => {
     } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 獲取所有文件夾 (用於移動功能)
+// 獲取所有文件夾
 app.get('/api/folders', async (c) => {
     try { return c.json(await data.getAllFolders(c.get('db'), c.get('user').id)); } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
 
-// 文件上傳
+// 文件上傳 (添加验重逻辑)
 app.post('/upload', async (c) => {
     const db = c.get('db'); const storage = c.get('storage'); const user = c.get('user'); const config = c.get('config');
     const body = await c.req.parseBody(); 
     const folderId = parseInt(decrypt(c.req.query('folderId')));
     
-    // ID 校驗
     if (isNaN(folderId)) return c.json({ success: false, message: '缺少或無效的 folderId' }, 400);
 
     const files = [];
@@ -452,13 +441,24 @@ app.post('/upload', async (c) => {
     const results = [];
     for (const file of files) {
         try {
+            // 验重逻辑：获取唯一文件名
+            const uniqueFileName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
+            
             const messageId = BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000));
-            const uploadResult = await storage.upload(file, file.name, file.type, user.id, folderId, config);
+            
+            // 使用唯一文件名上传到存储，防止后端存储覆盖（虽然 S3 Key 逻辑可能需要更强的唯一性，但这里至少保证了同文件夹内文件不覆盖）
+            const uploadResult = await storage.upload(file, uniqueFileName, file.type, user.id, folderId, config);
+            
             await data.addFile(db, {
-                message_id: messageId, fileName: file.name, mimetype: file.type, size: file.size,
-                file_id: uploadResult.fileId, thumb_file_id: uploadResult.thumbId || null, date: Date.now()
+                message_id: messageId, 
+                fileName: uniqueFileName, // 存入数据库的是处理过的唯一文件名
+                mimetype: file.type, 
+                size: file.size,
+                file_id: uploadResult.fileId, 
+                thumb_file_id: uploadResult.thumbId || null, 
+                date: Date.now()
             }, folderId, user.id, config.storageMode);
-            results.push({ name: file.name, success: true });
+            results.push({ name: uniqueFileName, success: true });
         } catch (e) { results.push({ name: file.name, success: false, error: e.message }); }
     }
     return c.json({ success: true, results });
@@ -511,6 +511,7 @@ app.post('/api/move', async (c) => {
     const { files, folders, targetFolderId } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
+    // 调用已更新的支持验重的 moveItems
     await data.moveItems(c.get('db'), c.get('storage'), (files||[]).map(BigInt), (folders||[]).map(parseInt), tid, c.get('user').id);
     return c.json({ success: true });
 });
@@ -585,3 +586,4 @@ app.post('/api/admin/set-quota', adminMiddleware, async (c) => {
 });
 
 export default app;
+}
