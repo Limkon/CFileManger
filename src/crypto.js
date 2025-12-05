@@ -3,36 +3,49 @@ import { Buffer } from 'node:buffer';
 import crypto from 'node:crypto';
 
 let SECRET_KEY = null;
-const IV_LENGTH = 16; // AES block size
+const IV_LENGTH = 16; 
 
 export function initCrypto(secret) {
-    if (!secret) {
-        console.warn("No SESSION_SECRET provided, using insecure default.");
-        // 如果沒有提供密鑰，使用一個默認值（僅用於開發，生產環境請務必設置環境變量）
-        SECRET_KEY = crypto.createHash('sha256').update('default-insecure-secret').digest();
-    } else {
-        // 使用 SHA-256 將任意長度的字符串轉換為 32 字節的密鑰
-        SECRET_KEY = crypto.createHash('sha256').update(secret).digest();
+    try {
+        const keyMaterial = secret || 'default-insecure-secret-fallback-key';
+        // 强制转换为字符串，防止传入 undefined 导致 crash
+        const secretStr = String(keyMaterial);
+        SECRET_KEY = crypto.createHash('sha256').update(secretStr).digest();
+    } catch (e) {
+        console.error("Crypto Init Failed:", e);
+        // 终极保底：生成一个全 0 的密钥，防止系统崩溃
+        SECRET_KEY = Buffer.alloc(32, 0);
     }
 }
 
-// 簡單的 ID 加密 (用於 URL 參數，避免直接暴露自增 ID)
 export function encrypt(text) {
-    if (!text && text !== 0) return null;
+    if (text === null || text === undefined) return null;
+    
+    // 关键修复：如果密钥未设置，立即尝试使用默认值初始化
+    if (!SECRET_KEY) {
+        console.warn("⚠️ SECRET_KEY missing in encrypt(), using lazy default.");
+        initCrypto('lazy-default-key-emergency');
+    }
+
     try {
         const iv = crypto.randomBytes(IV_LENGTH);
         const cipher = crypto.createCipheriv('aes-256-cbc', SECRET_KEY, iv);
-        let encrypted = cipher.update(text.toString());
+        let encrypted = cipher.update(String(text));
         encrypted = Buffer.concat([encrypted, cipher.final()]);
         return iv.toString('hex') + ':' + encrypted.toString('hex');
     } catch (e) {
-        console.error("Encrypt error:", e);
+        console.error("Encrypt execution failed:", e);
         return null;
     }
 }
 
 export function decrypt(text) {
     if (!text) return null;
+    
+    if (!SECRET_KEY) {
+        initCrypto('lazy-default-key-emergency');
+    }
+
     try {
         const textParts = text.split(':');
         const iv = Buffer.from(textParts.shift(), 'hex');
@@ -42,7 +55,6 @@ export function decrypt(text) {
         decrypted = Buffer.concat([decrypted, decipher.final()]);
         return decrypted.toString();
     } catch (e) {
-        // 解密失敗通常意味著 ID 無效或偽造
         return null;
     }
 }
