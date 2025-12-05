@@ -47,6 +47,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctxCreateFolderBtn = document.getElementById('ctxCreateFolderBtn');
     const ctxCreateFileBtn = document.getElementById('ctxCreateFileBtn');
     const editBtn = document.getElementById('editBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+    const openBtn = document.getElementById('openBtn');
+    const previewBtn = document.getElementById('previewBtn');
+    const lockBtn = document.getElementById('lockBtn');
+    const renameBtn = document.getElementById('renameBtn');
+    const deleteBtn = document.getElementById('deleteBtn');
 
     const viewSwitchBtn = document.getElementById('view-switch-btn');
     const trashBtn = document.getElementById('trashBtn'); 
@@ -58,7 +64,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Move Modal
     const moveModal = document.getElementById('moveModal');
-    const moveBtn = document.getElementById('moveBtn'); // 获取移动按钮
+    const moveBtn = document.getElementById('moveBtn');
     const folderTree = document.getElementById('folderTree');
     const confirmMoveBtn = document.getElementById('confirmMoveBtn');
     const cancelMoveBtn = document.getElementById('cancelMoveBtn');
@@ -66,7 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Share Modal
     const shareModal = document.getElementById('shareModal');
-    const shareBtn = document.getElementById('shareBtn'); // 获取分享按钮
+    const shareBtn = document.getElementById('shareBtn');
     const confirmShareBtn = document.getElementById('confirmShareBtn');
     const cancelShareBtn = document.getElementById('cancelShareBtn');
     const closeShareModalBtn = document.getElementById('closeShareModalBtn');
@@ -74,7 +80,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const customExpiresInput = document.getElementById('customExpiresInput');
     const sharePasswordInput = document.getElementById('sharePasswordInput');
     const shareResult = document.getElementById('shareResult');
-    const shareOptions = document.getElementById('shareOptions'); // 分享选项区域
+    const shareOptions = document.getElementById('shareOptions');
     const shareLinkContainer = document.getElementById('shareLinkContainer');
     const copyLinkBtn = document.getElementById('copyLinkBtn');
 
@@ -102,7 +108,7 @@ document.addEventListener('DOMContentLoaded', () => {
         },
         success: (text = '完成') => {
             taskText.textContent = text;
-            taskIcon.className = 'task-icon fas fa-check-circle'; // 停止旋转，显示打钩
+            taskIcon.className = 'task-icon fas fa-check-circle';
             taskIcon.style.color = '#28a745';
             taskProgress.style.width = '100%';
             TaskManager.hide(2000);
@@ -116,7 +122,6 @@ document.addEventListener('DOMContentLoaded', () => {
         hide: (delay = 0) => {
             TaskManager.timer = setTimeout(() => {
                 taskStatusBar.classList.remove('active');
-                // 重置状态以便下次使用
                 setTimeout(() => {
                     taskIcon.style.color = '';
                     taskIcon.classList.remove('spinning');
@@ -349,7 +354,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if(isTrashMode) return;
         if (item.type === 'folder') { loadFolder(item.encrypted_id); } 
         else { 
-            // 简单的下载反馈
             TaskManager.show('正在请求下载...', 'fas fa-download');
             setTimeout(() => TaskManager.success('下载已开始'), 2000);
             
@@ -423,20 +427,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (hasSelection) {
             globalActions.forEach(el => el.style.display = 'none');
             itemActions.forEach(el => el.style.display = 'flex');
-            const setDisplay = (id, show) => {
-                const btn = document.getElementById(id);
+            const setDisplay = (btn, show) => {
                 if (btn) btn.style.display = show ? 'flex' : 'none';
             };
-            setDisplay('openBtn', isSingle && firstType === 'folder');
-            setDisplay('previewBtn', isSingle && firstType === 'file');
-            setDisplay('editBtn', isSingle && firstType === 'file'); 
-            setDisplay('downloadBtn', isSingle && firstType === 'file');
-            setDisplay('renameBtn', isSingle);
-            setDisplay('shareBtn', isSingle);
-            setDisplay('moveBtn', true); // 移动功能对单选或多选都有效
-            setDisplay('lockBtn', isSingle && firstType === 'folder');
-            const delBtn = document.getElementById('deleteBtn');
-            if(delBtn) delBtn.innerHTML = '<i class="fas fa-trash-alt"></i> 删除';
+            setDisplay(openBtn, isSingle && firstType === 'folder');
+            setDisplay(previewBtn, isSingle && firstType === 'file');
+            setDisplay(editBtn, isSingle && firstType === 'file'); 
+            setDisplay(downloadBtn, isSingle && firstType === 'file');
+            setDisplay(renameBtn, isSingle);
+            setDisplay(shareBtn, isSingle);
+            setDisplay(moveBtn, true); 
+            setDisplay(lockBtn, isSingle && firstType === 'folder');
+            
+            if(deleteBtn) deleteBtn.innerHTML = '<i class="fas fa-trash-alt"></i> 删除';
         } else {
             globalActions.forEach(el => el.style.display = 'flex');
             itemActions.forEach(el => el.style.display = 'none');
@@ -483,7 +486,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('deleteBtn').addEventListener('click', async () => {
+    deleteBtn.addEventListener('click', async () => {
         if (selectedItems.size === 0) return;
         if (isTrashMode) {
             alert('请使用顶部的「还原」或「永久删除」按钮进行操作。');
@@ -540,7 +543,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('renameBtn').addEventListener('click', async () => {
+    renameBtn.addEventListener('click', async () => {
         if (selectedItems.size !== 1) return;
         const idStr = Array.from(selectedItems)[0]; const [type, id] = parseItemId(idStr); const item = items.find(i => getItemId(i) === idStr);
         if (!item) return;
@@ -551,7 +554,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 修复：移动功能逻辑 (Move)
+    // 移动功能逻辑 (Move)
     // =================================================================================
     if (moveBtn) {
         moveBtn.addEventListener('click', () => {
@@ -569,7 +572,7 @@ document.addEventListener('DOMContentLoaded', () => {
         folderTree.innerHTML = '<div style="padding:10px;color:#666;">加载中...</div>';
         try {
             const res = await axios.get('/api/folders');
-            const allFolders = res.data; // [{id, name, parent_id, encrypted_id}]
+            const allFolders = res.data; 
             renderFolderTree(allFolders);
         } catch (e) {
             folderTree.innerHTML = `<div style="color:red;padding:10px;">加载失败: ${e.message}</div>`;
@@ -577,30 +580,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function renderFolderTree(folders) {
-        // 1. 找出要移动的文件夹ID (为了避免移动到自己或子文件夹)
+        // 找出要移动的文件夹ID (为了避免移动到自己或子文件夹)
         const movingFolderIds = new Set();
         selectedItems.forEach(itemStr => {
             const [type, id] = parseItemId(itemStr);
             if (type === 'folder') {
-                // 这里的 id 是加密 ID，但 API 返回的 parent_id 是明文 int。
-                // 我们需要找到对应的明文 ID，或者 API 返回时 parent_id 也是加密的?
-                // 根据 src/data.js getAllFolders, id 是明文int, encrypted_id 是加密的.
-                // parseItemId 返回的是 encrypted_id (因为 grid item dataset.id 用的是 getItemId -> file:message_id / folder:id)
-                // 等等，grid item dataset.id: getItemId(item)
-                // item.id 是明文 (getFolderContents returned id).
-                // wait... data.js: getFolderContents returns folders.map(f => ({ ...f, encrypted_id: encrypt(f.id) }))
-                // getItemId uses `item.id` which is likely the raw ID if sent by getFolderContents?
-                // let's check data.js getFolderContents again.
-                // SELECT id... -> raw ID.
-                // So item.id is raw ID. getItemId uses raw ID.
-                // But loadFolder uses encryptedId.
-                // Let's fix getAllFolders: it returns {id, name, parent_id, encrypted_id}.
+                // 这里的 id 是加密 ID，API 返回的也是带 encrypted_id
                 const matched = folders.find(f => f.encrypted_id === id || f.id == id);
                 if(matched) movingFolderIds.add(matched.id);
             }
         });
 
-        // 2. 构建树结构
         const map = {};
         let root = null;
         folders.forEach(f => {
@@ -612,17 +602,12 @@ document.addEventListener('DOMContentLoaded', () => {
             if (f.parent_id && map[f.parent_id]) {
                 map[f.parent_id].children.push(f);
             } else {
-                // 假设 parent_id 为 null 或者是找不到父节点的孤儿节点（当作根处理）
                 if(!root) root = f; 
-                // 注意：如果允许多个根目录( rare but possible with bugs), array logic needed.
-                // 但这里我们主要找 parent_id IS NULL 的那个
             }
         });
         
-        // 如果没找到 root (bad data?)
         if (!root && folders.length > 0) root = folders[0]; 
 
-        // 3. 渲染
         folderTree.innerHTML = '';
         if (root) {
             folderTree.appendChild(createFolderNode(root, movingFolderIds));
@@ -633,14 +618,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function createFolderNode(folder, movingIds) {
         const container = document.createElement('div');
-        
         const itemDiv = document.createElement('div');
         itemDiv.className = 'folder-item';
         
-        // 检查是否是正在移动的文件夹自己
         const isSelf = movingIds.has(folder.id);
-        // 注意：这里不做复杂的子节点禁用检查，只禁用自己。如果是移动到子节点，后端或逻辑应阻止，或简单处理。
-        // 完善的逻辑应该递归禁用子节点。
 
         if (isSelf) {
             itemDiv.style.color = '#999';
@@ -661,12 +642,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const childrenContainer = document.createElement('div');
             childrenContainer.style.paddingLeft = '20px';
             folder.children.forEach(child => {
-                // 递归传递 movingIds，如果父节点是正在移动的，子节点也不应可选（防止循环）
-                // 这里的 movingIds 只是当前选中的。我们需要判断 child 是否是 movingIds 的后代。
-                // 简单起见，如果 isSelf 为 true，子节点也视为不可选。
                 const childNode = createFolderNode(child, movingIds);
                 if(isSelf) {
-                    // 禁用子节点交互
                     const childItemDiv = childNode.querySelector('.folder-item');
                     if(childItemDiv) {
                         childItemDiv.style.color = '#999';
@@ -678,7 +655,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             container.appendChild(childrenContainer);
         }
-
         return container;
     }
 
@@ -687,9 +663,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const files = []; const folders = [];
         selectedItems.forEach(id => { 
             const [type, realId] = parseItemId(id); 
-            // 这里的 realId 是 items 里的 ID。
-            // items 是 getFolderContents 来的。
-            // getFolderContents: files use message_id (string), folders use id (int).
             if (type === 'file') files.push(realId); 
             else folders.push(realId); 
         });
@@ -715,7 +688,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // =================================================================================
-    // 修复：分享功能逻辑 (Share)
+    // 分享功能逻辑 (Share)
     // =================================================================================
     if (shareBtn) {
         shareBtn.addEventListener('click', () => {
@@ -740,7 +713,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     confirmShareBtn.addEventListener('click', async () => {
         const itemStr = Array.from(selectedItems)[0];
-        const [type, id] = parseItemId(itemStr); // id is raw ID
+        const [type, id] = parseItemId(itemStr); // id is raw ID / message_id
         const password = sharePasswordInput.value;
         const expiresIn = expiresInSelect.value;
         
@@ -793,7 +766,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    document.getElementById('downloadBtn').addEventListener('click', () => {
+    downloadBtn.addEventListener('click', () => {
         if (selectedItems.size !== 1) return;
         const idStr = Array.from(selectedItems)[0]; const [type, id] = parseItemId(idStr);
         if (type !== 'file') return alert('只能下载文件');
@@ -803,7 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
         window.open(`/download/proxy/${id}`, '_blank');
     });
     
-    document.getElementById('openBtn').addEventListener('click', () => {
+    openBtn.addEventListener('click', () => {
          if (selectedItems.size !== 1) return;
          const idStr = Array.from(selectedItems)[0]; const [type, id] = parseItemId(idStr);
          if (type === 'folder') {
@@ -812,7 +785,7 @@ document.addEventListener('DOMContentLoaded', () => {
          }
     });
     
-    document.getElementById('previewBtn').addEventListener('click', async () => {
+    previewBtn.addEventListener('click', async () => {
         if (selectedItems.size !== 1) return;
         const idStr = Array.from(selectedItems)[0]; const [type, id] = parseItemId(idStr); const item = items.find(i => getItemId(i) === idStr);
         if (!item || type !== 'file') return;
@@ -838,7 +811,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     closePreviewBtn.onclick = () => previewModal.style.display = 'none';
     
-    document.getElementById('lockBtn').addEventListener('click', async () => {
+    lockBtn.addEventListener('click', async () => {
         if (selectedItems.size !== 1) return;
         const idStr = Array.from(selectedItems)[0]; const [type, id] = parseItemId(idStr);
         if (type !== 'folder') return;
@@ -883,7 +856,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     // =================================================================================
-    // 9. 上传功能 (增强版：支持递归目录创建 + 状态栏)
+    // 上传功能 (增强版：支持递归目录创建 + 状态栏)
     // =================================================================================
 
     async function getFolderContents(encryptedId) {
@@ -1007,7 +980,6 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('uploadForm').style.display = 'none';
         }
         progressArea.style.display = 'block';
-        const progressBar = document.getElementById('progressBar');
         let statusText = document.getElementById('uploadStatusText');
         if (!statusText) {
             statusText = document.createElement('div');
