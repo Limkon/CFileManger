@@ -1,5 +1,3 @@
-// src/config.js
-
 export default class ConfigManager {
     constructor(kv) {
         this.kv = kv;
@@ -7,36 +5,39 @@ export default class ConfigManager {
     }
 
     async load() {
-        // 簡單內存緩存，避免單次請求重複讀取 KV
         if (this.cache) return this.cache;
         
         try {
-            // 從 KV 獲取配置
-            const data = await this.kv.get('app_config', 'json');
-            
-            // 如果 KV 為空，返回默認配置結構
+            const data = await this.kv.get('config', { type: 'json' });
+            // 提供默认值，防止 null 导致报错
             this.cache = data || {
-                storageMode: 'local', // 默認模式 (注意：Worker 本地存儲不持久，建議盡快配置 S3)
+                storageMode: 'local', // 默认为本地或 R2
                 s3: {},
-                webdav: {}
+                webdav: {},
+                telegram: {}
             };
         } catch (e) {
-            console.error("Config load failed", e);
-            // 發生錯誤時返回空對象防止崩潰
-            this.cache = {};
+            console.error("Config Load Error:", e);
+            this.cache = {}; // 降级处理
         }
         return this.cache;
     }
 
     async save(newConfig) {
         const current = await this.load();
-        // 合併新舊配置
-        const updated = { ...current, ...newConfig };
-        
-        // 寫入 KV
-        await this.kv.put('app_config', JSON.stringify(updated));
-        
-        // 更新緩存
+        // 深度合并配置，防止覆盖
+        const updated = {
+            ...current,
+            ...newConfig,
+            // 针对嵌套对象进行合并 (s3, webdav, telegram)
+            s3: { ...(current.s3 || {}), ...(newConfig.s3 || {}) },
+            webdav: { ...(current.webdav || {}), ...(newConfig.webdav || {}) },
+            telegram: { ...(current.telegram || {}), ...(newConfig.telegram || {}) }
+        };
+
+        // 移除 undefined 或 null 的键（可选）
+        await this.kv.put('config', JSON.stringify(updated));
         this.cache = updated;
+        return true;
     }
 }
