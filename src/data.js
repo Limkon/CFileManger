@@ -1,5 +1,3 @@
-// src/data.js
-
 import path from 'node:path';
 import bcrypt from 'bcryptjs';
 import { encrypt, decrypt } from './crypto.js';
@@ -15,6 +13,7 @@ const SAFE_SELECT_ID_AS_TEXT = `CAST(message_id AS TEXT) AS id`;
 export async function createUser(db, username, hashedPassword) {
     const sql = `INSERT INTO users (username, password, is_admin, max_storage_bytes) VALUES (?, ?, 0, 1073741824)`;
     const result = await db.run(sql, [username, hashedPassword]);
+    
     // 兼容性修复：如果 last_row_id 不存在，尝试反查
     let newId = result?.meta?.last_row_id;
     if (!newId) {
