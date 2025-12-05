@@ -600,6 +600,107 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) { alert('操作失败'); }
     });
 
+    // --- 分享功能逻辑 ---
+
+    // 1. 打开分享弹窗
+    const shareBtn = document.getElementById('shareBtn');
+    if (shareBtn) {
+        shareBtn.addEventListener('click', () => {
+            if (selectedItems.size !== 1) return;
+            
+            // 重置弹窗状态
+            document.getElementById('shareOptions').style.display = 'block';
+            document.getElementById('shareResult').style.display = 'none';
+            sharePasswordInput.value = '';
+            expiresInSelect.value = '24h';
+            customExpiresInput.style.display = 'none';
+            customExpiresInput.value = '';
+            
+            shareModal.style.display = 'block';
+        });
+    }
+
+    // 2. 处理有效期选择变化 (显示/隐藏自定义时间输入框)
+    if (expiresInSelect) {
+        expiresInSelect.addEventListener('change', () => {
+            customExpiresInput.style.display = expiresInSelect.value === 'custom' ? 'block' : 'none';
+        });
+    }
+
+    // 3. 关闭分享弹窗
+    const hideShareModal = () => {
+        shareModal.style.display = 'none';
+    };
+    if (closeShareModalBtn) closeShareModalBtn.addEventListener('click', hideShareModal);
+    if (cancelShareBtn) cancelShareBtn.addEventListener('click', hideShareModal);
+
+    // 4. 确认创建分享链接
+    if (confirmShareBtn) {
+        confirmShareBtn.addEventListener('click', async () => {
+            if (selectedItems.size !== 1) return;
+            const idStr = Array.from(selectedItems)[0];
+            const [type, id] = parseItemId(idStr); // 获取真实的 ID 和类型
+            
+            const expiresIn = expiresInSelect.value;
+            const password = sharePasswordInput.value;
+            let customExpiresAt = null;
+
+            // 处理自定义过期时间
+            if (expiresIn === 'custom') {
+                const dateVal = customExpiresInput.value;
+                if (!dateVal) return alert('请选择自定义的过期时间');
+                customExpiresAt = new Date(dateVal).getTime();
+            }
+
+            try {
+                confirmShareBtn.disabled = true;
+                confirmShareBtn.textContent = '生成中...';
+
+                const res = await axios.post('/api/share/create', {
+                    itemId: id,
+                    itemType: type,
+                    expiresIn: expiresIn,
+                    password: password,
+                    customExpiresAt: customExpiresAt
+                });
+
+                if (res.data.success) {
+                    // 切换到结果显示界面
+                    document.getElementById('shareOptions').style.display = 'none';
+                    document.getElementById('shareResult').style.display = 'block';
+                    
+                    // 拼接完整的 URL
+                    const fullLink = window.location.origin + res.data.link;
+                    shareLinkContainer.textContent = fullLink;
+                    
+                    // 绑定复制按钮事件
+                    copyLinkBtn.onclick = () => {
+                        navigator.clipboard.writeText(fullLink).then(() => {
+                            const originalText = copyLinkBtn.textContent;
+                            copyLinkBtn.textContent = '已复制!';
+                            copyLinkBtn.classList.remove('primary-btn');
+                            copyLinkBtn.classList.add('success-btn'); // 假设你有 success-btn 样式，或者直接变色
+                            copyLinkBtn.style.backgroundColor = '#28a745'; // 强制变绿
+
+                            setTimeout(() => {
+                                copyLinkBtn.textContent = originalText;
+                                copyLinkBtn.classList.add('primary-btn');
+                                copyLinkBtn.classList.remove('success-btn');
+                                copyLinkBtn.style.backgroundColor = '';
+                            }, 2000);
+                        }).catch(() => alert('复制失败，请手动复制'));
+                    };
+                }
+            } catch (error) {
+                console.error(error);
+                alert('创建分享失败: ' + (error.response?.data?.message || error.message));
+            } finally {
+                confirmShareBtn.disabled = false;
+                confirmShareBtn.textContent = '生成链接';
+            }
+        });
+    }
+
     viewSwitchBtn.addEventListener('click', () => {
         viewMode = viewMode === 'grid' ? 'list' : 'grid';
         localStorage.setItem('viewMode', viewMode);
