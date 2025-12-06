@@ -410,8 +410,13 @@ app.post('/api/move', async (c) => {
     const { files, folders, targetFolderId, conflictMode } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
+    const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
+
     try {
-        await data.moveItems(c.get('db'), c.get('storage'), (files||[]), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode);
+        await data.moveItems(c.get('db'), c.get('storage'), (files||[]), parsedFolderIds, tid, c.get('user').id, conflictMode);
         return c.json({success:true});
     } catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
@@ -427,7 +432,11 @@ app.post('/api/folder/create', async (c) => {
 app.post('/api/delete', async (c) => {
     const { files, folders, permanent } = await c.req.json();
     const fIds = (files||[]).map(String); 
-    const dIds = (folders||[]).map(parseInt);
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
+    const dIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
+    
     if(permanent) await data.unifiedDelete(c.get('db'), c.get('storage'), null, null, c.get('user').id, fIds, dIds);
     else await data.softDeleteItems(c.get('db'), fIds, dIds, c.get('user').id);
     return c.json({success:true});
@@ -437,10 +446,15 @@ app.get('/api/trash', async (c) => c.json(await data.getTrashContents(c.get('db'
 
 app.post('/api/trash/check', async (c) => {
     const { files, folders } = await c.req.json();
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
+    const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
+    
     const conflicts = await data.checkRestoreConflicts(
         c.get('db'), 
         (files||[]).map(String), 
-        (folders||[]).map(parseInt), 
+        parsedFolderIds, 
         c.get('user').id
     );
     return c.json({ conflicts });
@@ -448,11 +462,16 @@ app.post('/api/trash/check', async (c) => {
 
 app.post('/api/trash/restore', async (c) => {
     const { files, folders, conflictMode } = await c.req.json();
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
+    const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
+
     await data.restoreItems(
         c.get('db'), 
         c.get('storage'), // 传入 storage 以支持 overwrite 时的删除
         (files||[]).map(String), 
-        (folders||[]).map(parseInt), 
+        parsedFolderIds, 
         c.get('user').id,
         conflictMode || 'rename'
     );
@@ -474,6 +493,7 @@ app.get('/api/shares', async (c) => c.json(await data.getActiveShares(c.get('db'
 
 app.post('/api/share/create', async (c) => {
     const body = await c.req.json();
+    await data.createShareLink(c.get('db'), body.itemId, body.itemType, body.expiresIn, c.get('user').id, body.password, body.customExpiresAt);
     const res = await data.createShareLink(c.get('db'), body.itemId, body.itemType, body.expiresIn, c.get('user').id, body.password, body.customExpiresAt);
     return res.success ? c.json({success:true, link:`/share/view/${body.itemType}/${res.token}`}) : c.json(res, 500);
 });
