@@ -29,11 +29,94 @@ app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
 app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
 app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
-app.get('/shares', serveStatic({ path: 'shares.html', manifest })); // 确保分享管理页面可访问
+app.get('/shares', serveStatic({ path: 'shares.html', manifest })); 
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
-// 分享页面模板 (修复了文件夹视图中文件无法下载的问题)
-const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item a{text-decoration:none;color:inherit;display:flex;align-items:center;width:100%}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加载...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const itemType=pathParts[pathParts.length-1];const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加载失败');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>错误</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密码保护</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="请输入密码" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解锁</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>时间: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下载文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夹)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><a href="/share/download/\${token}/\${f.id}" target="_blank"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name || f.fileName}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></a></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
+// 分享页面模板 (已更新：支持图片/视频预览及文本直接展示)
+const SHARE_HTML = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title>
+<link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css">
+<style>
+.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}
+.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}
+.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}
+.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}
+.list-item a{text-decoration:none;color:inherit;display:flex;align-items:center;width:100%}
+.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}
+pre{white-space:pre-wrap;word-wrap:break-word;background:#f8f9fa;padding:15px;border-radius:4px;border:1px solid #eee;max-height:60vh;overflow:auto;text-align:left;font-family:Consolas,monaco,monospace;font-size:13px;}
+</style>
+</head>
+<body>
+<div class="container" id="app"><h2 style="text-align:center;">正在加载...</h2></div>
+<script>
+const pathParts=window.location.pathname.split('/');const token=pathParts.pop();
+const app=document.getElementById('app');
+
+function escapeHtml(t){if(!t)return'';return t.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'})[m])}
+function formatSize(b){if(b===0)return'0 B';const k=1024,s=['B','KB','MB','GB','TB'],i=Math.floor(Math.log(b)/Math.log(k));return parseFloat((b/Math.pow(k,i)).toFixed(2))+' '+s[i]}
+
+async function load(){
+    try{
+        const res=await fetch('/api/public/share/'+token);
+        const data=await res.json();
+        if(!res.ok)throw new Error(data.message||'加载失败');
+        if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}
+        else if(data.type==='file'){renderFile(data)}
+        else{renderFolder(data)}
+    }catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>错误</h3><p>'+e.message+'</p></div>'}
+}
+
+function renderPasswordForm(name){
+    app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${escapeHtml(name)} 受密码保护</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="请输入密码" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解锁</button></div><p id="err" class="error-msg"></p></div>\`
+}
+
+window.submitPass=async()=>{
+    const pass=document.getElementById('pass').value;
+    const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
+    const d=await res.json();
+    if(d.success)load();else document.getElementById('err').textContent=d.message
+};
+
+function renderFile(data){
+    const ext = (data.name||'').split('.').pop().toLowerCase();
+    const isImg = ['jpg','jpeg','png','gif','webp','svg','bmp'].includes(ext);
+    const isVideo = ['mp4','webm','mov','avi','mkv'].includes(ext);
+    const isText = ['txt','md','js','json','css','html','xml','log','ini','conf','sh','yaml'].includes(ext);
+    
+    let preview = '';
+    if(isImg) preview = \`<div style="margin:20px 0;"><img src="\${data.downloadUrl}" style="max-width:100%;max-height:80vh;border-radius:4px;"></div>\`;
+    else if(isVideo) preview = \`<div style="margin:20px 0;"><video src="\${data.downloadUrl}" controls style="max-width:100%;max-height:80vh;border-radius:4px;"></video></div>\`;
+    else if(isText) {
+        preview = \`<div id="txt-pv" style="margin-top:20px;">正在加载文本内容...</div>\`;
+        // 异步加载文本
+        fetch(data.downloadUrl).then(r=>r.text()).then(t=>{
+            const el=document.getElementById('txt-pv');
+            if(el){el.innerHTML='<pre>'+escapeHtml(t.slice(0,100000))+(t.length>100000?'\\n... (内容过长截断)':'')+'</pre>'}
+        }).catch(e=>{
+            const el=document.getElementById('txt-pv');if(el)el.innerHTML='<span style="color:red">文本预览加载失败</span>'
+        });
+    }
+
+    app.innerHTML=\`<div style="text-align:center;">
+        <div class="file-icon"><i class="fas fa-\${isImg?'image':(isVideo?'video':(isText?'file-alt':'file'))}"></i></div>
+        <h2>\${escapeHtml(data.name)}</h2>
+        <p style="color:#666;">大小: \${formatSize(data.size)} <span style="margin:0 10px;">|</span> 时间: \${new Date(data.date).toLocaleString()}</p>
+        \${preview}
+        <div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下载文件</a></div>
+    </div>\`
+}
+
+function renderFolder(data){
+    let html=\`<h3>\${escapeHtml(data.name)} (文件夹)</h3><div class="list">\`;
+    if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${escapeHtml(f.name)}</span></div>\`});
+    if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><a href="/share/download/\${token}/\${f.id}" target="_blank"><i class="fas fa-file" style="color:#555;"></i> <span>\${escapeHtml(f.name||f.fileName)}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${formatSize(f.size)}</span></a></div>\`});
+    html+='</div>';app.innerHTML=html
+}
+load();
+</script></body></html>`;
+
 app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 
 // =================================================================================
@@ -103,7 +186,7 @@ const adminMiddleware = async (c, next) => {
 };
 
 // =================================================================================
-// 5. 分享相关 API (新增/修复部分)
+// 5. 分享相关 API
 // =================================================================================
 
 // 获取分享信息 (公开)
@@ -137,7 +220,7 @@ app.get('/api/public/share/:token', async (c) => {
         return c.json({ 
             isLocked: true, 
             isUnlocked: false, 
-            name: item.fileName || item.name, // 仅返回名称，不返回内容
+            name: item.fileName || item.name, 
             type 
         });
     }
@@ -475,9 +558,7 @@ app.post('/api/move', async (c) => {
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
     
-    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
-    // **修复结束**
 
     try {
         await data.moveItems(c.get('db'), c.get('storage'), (files||[]), parsedFolderIds, tid, c.get('user').id, conflictMode);
@@ -496,10 +577,7 @@ app.post('/api/folder/create', async (c) => {
 app.post('/api/delete', async (c) => {
     const { files, folders, permanent } = await c.req.json();
     const fIds = (files||[]).map(String); 
-    
-    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const dIds = (folders||[]).map(id => parseInt(id, 10));
-    // **修复结束**
     
     if(permanent) await data.unifiedDelete(c.get('db'), c.get('storage'), null, null, c.get('user').id, fIds, dIds);
     else await data.softDeleteItems(c.get('db'), fIds, dIds, c.get('user').id);
@@ -510,35 +588,15 @@ app.get('/api/trash', async (c) => c.json(await data.getTrashContents(c.get('db'
 
 app.post('/api/trash/check', async (c) => {
     const { files, folders } = await c.req.json();
-    
-    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
-    // **修复结束**
-    
-    const conflicts = await data.checkRestoreConflicts(
-        c.get('db'), 
-        (files||[]).map(String), 
-        parsedFolderIds, 
-        c.get('user').id
-    );
+    const conflicts = await data.checkRestoreConflicts(c.get('db'), (files||[]).map(String), parsedFolderIds, c.get('user').id);
     return c.json({ conflicts });
 });
 
 app.post('/api/trash/restore', async (c) => {
     const { files, folders, conflictMode } = await c.req.json();
-    
-    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
-    // **修复结束**
-
-    await data.restoreItems(
-        c.get('db'), 
-        c.get('storage'), // 传入 storage 以支持 overwrite 时的删除
-        (files||[]).map(String), 
-        parsedFolderIds, 
-        c.get('user').id,
-        conflictMode || 'rename'
-    );
+    await data.restoreItems(c.get('db'), c.get('storage'), (files||[]).map(String), parsedFolderIds, c.get('user').id, conflictMode || 'rename');
     return c.json({ success: true });
 });
 
