@@ -1,4 +1,4 @@
-// public/manager.js
+// public/manager.js - 完整修复版
 
 // =================================================================================
 // 1. 全局工具函数 (无依赖，放在最外层)
@@ -1223,8 +1223,24 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadForm.addEventListener('submit', async (e) => {
             e.preventDefault();
             let allItems = [];
-            if (fileInput.files.length > 0) allItems = allItems.concat(Array.from(fileInput.files).map(f => ({ file: f, path: '' })));
-            if (folderInput.files.length > 0) allItems = allItems.concat(Array.from(folderInput.files));
+            
+            // 处理普通文件上传
+            if (fileInput.files.length > 0) {
+                allItems = allItems.concat(Array.from(fileInput.files).map(f => ({ file: f, path: '' })));
+            }
+            
+            // 处理文件夹上传 (修复后)
+            if (folderInput.files.length > 0) {
+                allItems = allItems.concat(Array.from(folderInput.files).map(f => {
+                    const parts = f.webkitRelativePath.split('/');
+                    parts.pop(); // 移除文件名
+                    return { 
+                        file: f, 
+                        path: parts.join('/') 
+                    };
+                }));
+            }
+            
             const targetId = folderSelect ? folderSelect.value : currentFolderId;
             await executeUpload(allItems, targetId || currentFolderId);
         });
