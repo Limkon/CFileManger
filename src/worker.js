@@ -590,6 +590,25 @@ app.post('/api/move', async (c) => {
 
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
 
+// 用户自行修改密码接口
+app.post('/api/user/change-password', async (c) => {
+    const user = c.get('user');
+    const { oldPassword, newPassword } = await c.req.json();
+    if (!oldPassword || !newPassword) return c.json({ success: false, message: '参数不完整' }, 400);
+
+    const db = c.get('db');
+    // 获取完整的用户信息（包括密码hash）
+    const userInfo = await data.findUserByName(db, user.username);
+    
+    const bcrypt = await import('bcryptjs');
+    if (!userInfo || !bcrypt.compareSync(oldPassword, userInfo.password)) {
+        return c.json({ success: false, message: '旧密码错误' }, 403);
+    }
+
+    await data.changeUserPassword(db, user.id, bcrypt.hashSync(newPassword, 10));
+    return c.json({ success: true });
+});
+
 app.post('/api/folder/create', async (c) => {
     const { name, parentId } = await c.req.json();
     await data.createFolder(c.get('db'), name, parentId ? parseInt(decrypt(parentId)) : null, c.get('user').id);
