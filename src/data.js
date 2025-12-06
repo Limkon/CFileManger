@@ -217,21 +217,25 @@ export async function createFolder(db, name, parentId, userId) {
             const whereClause = parentId === null ? "parent_id IS NULL" : "parent_id = ?";
             const params = parentId === null ? [name, userId] : [name, parentId, userId];
             
-            // 修正 BUG: 1. 查找所有可能造成衝突的現有記錄（不限定是否已刪除），獲取 deleted_at
+            // 修正 BUG: 查找所有可能造成衝突的記錄（包括已刪除的）
             row = await db.get(`SELECT id, deleted_at FROM folders WHERE name = ? AND ${whereClause} AND user_id = ?`, params); 
             
             if (row) {
-                // 2. 檢查記錄是否已刪除 (deleted_at 不為 NULL 表示在回收站中)
+                // 如果存在已刪除的同名文件夾
                 if (row.deleted_at !== null) {
-                    // 是已刪除的文件夾，執行復原操作：清除 deleted_at 並設置 is_deleted = 0
-                    await db.run("UPDATE folders SET is_deleted = 0, deleted_at = NULL WHERE id = ?", [row.id]); 
-                    return { success: true, id: row.id, restored: true };
+                    // 【关键修复】不要直接还原旧文件夹，否则内容会丢失结构。
+                    // 应该将旧文件夹在回收站中重命名，给新文件夹腾出位置。
+                    const trashName = `${name}_deleted_${Date.now()}`;
+                    await db.run("UPDATE folders SET name = ? WHERE id = ?", [trashName, row.id]);
+                    
+                    // 重试创建新文件夹
+                    const retryResult = await db.run(sql, [name, parentId, userId]);
+                    return { success: true, id: retryResult.meta.last_row_id };
                 } else {
-                    // 這是活躍的文件夾，拋出衝突錯誤
+                    // 活躍文件夾衝突
                     throw new Error('文件夾已存在');
                 }
             } 
-            // 如果 UNIQUE 衝突發生，但找不到記錄（理論上不該發生），則拋出原始錯誤
             throw err;
         }
         throw err;
