@@ -148,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const conflictSkipBtn = document.getElementById('conflictSkipBtn');
     const conflictCancelBtn = document.getElementById('conflictCancelBtn');
 
-    // --- 函数定义区 (先定义，后使用) ---
+    // --- 函数定义区 ---
 
     // 1. 任务管理器
     const TaskManager = {
@@ -587,16 +587,53 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if(restoreBtn) restoreBtn.addEventListener('click', async () => {
         if (selectedItems.size === 0) return alert('请先选择要还原的项目');
+        
         const files = []; const folders = [];
-        selectedItems.forEach(id => { const [type, realId] = parseItemId(id); if (type === 'file') files.push(realId); else folders.push(realId); });
-        try { 
+        selectedItems.forEach(id => { 
+            const [type, realId] = parseItemId(id); 
+            if (type === 'file') files.push(realId); 
+            else folders.push(realId); 
+        });
+
+        let conflictMode = 'rename'; // 默认策略
+
+        try {
+            // 1. 预检查：查询是否有文件名冲突
+            TaskManager.show('正在检查冲突...', 'fas fa-spinner');
+            const checkRes = await axios.post('/api/trash/check', { files, folders });
+            const { conflicts } = checkRes.data;
+
+            if (conflicts && conflicts.length > 0) {
+                // 2. 如果有冲突，显示弹窗让用户选择
+                const conflictNames = conflicts.slice(0, 3).join(', ');
+                const moreText = conflicts.length > 3 ? ` 等 ${conflicts.length} 个项目` : '';
+                const msg = `还原的目标位置已存在同名项目: "${conflictNames}"${moreText}。`;
+
+                const result = await showConflictModal(msg);
+                
+                if (result.choice === 'cancel') {
+                    TaskManager.hide();
+                    return;
+                }
+                conflictMode = result.choice;
+            }
+
+            // 3. 执行还原
             TaskManager.show('正在还原...', 'fas fa-trash-restore');
-            await axios.post('/api/trash/restore', { files, folders }); 
+            await axios.post('/api/trash/restore', { 
+                files, 
+                folders, 
+                conflictMode: conflictMode 
+            }); 
+            
             selectedItems.clear(); 
             loadTrash(); 
             updateQuota(); 
             TaskManager.success('还原成功');
-        } catch (error) { TaskManager.error('还原失败'); alert('还原失败'); }
+        } catch (error) { 
+            TaskManager.error('还原失败'); 
+            alert('还原失败: ' + (error.response?.data?.message || error.message)); 
+        }
     });
 
     if(deleteForeverBtn) deleteForeverBtn.addEventListener('click', async () => {
@@ -861,8 +898,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!selectedMoveTargetId) return;
         
         const files = []; const folders = [];
-        // 收集所有移动项的名称和类型用于比对
-        const moveItemsList = []; 
+        const moveItemNames = []; 
         
         selectedItems.forEach(id => { 
             const [type, realId] = parseItemId(id); 
@@ -873,7 +909,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else { 
                     folders.push(realId); 
                 }
-                moveItemsList.push({ type, name: originalItem.name });
+                moveItemNames.push({ type, name: originalItem.name });
             }
         });
         
@@ -889,7 +925,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const targetFolderNames = new Set(targetContents.folders.map(f => f.name));
             
             // 2. 筛选出冲突项
-            const conflicts = moveItemsList.filter(item => {
+            const conflicts = moveItemNames.filter(item => {
                 if (item.type === 'file') {
                     return targetFileNames.has(item.name);
                 } else {
@@ -897,10 +933,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
             
-            let conflictMode = 'rename'; // 默认策略
+            let conflictMode = 'rename'; 
             
             if (conflicts.length > 0) {
-                // 3. 如果有冲突，显示弹窗让用户选择 (包含覆盖、跳过、重命名、取消以及批量选框)
+                // 3. 如果有冲突，显示弹窗让用户选择
                 const conflictNames = conflicts.map(c => c.name).slice(0, 3).join(', ');
                 const moreText = conflicts.length > 3 ? ` 等 ${conflicts.length} 个项目` : '';
                 const msg = `目标位置已存在同名项目: "${conflictNames}"${moreText}。`;
@@ -916,7 +952,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 conflictMode = result.choice;
             }
 
-            // 4. 执行移动，携带用户选择的冲突处理模式
+            // 4. 执行移动
             confirmMoveBtn.textContent = '移动中...';
             TaskManager.show('正在移动...', 'fas fa-arrows-alt'); 
             
@@ -1063,7 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 try {
                     // 发起后端检查
                     const checkRes = await axios.post('/api/file/check', {
-                        folderId: targetFolderId, // 传递加密的 ID
+                        folderId: targetFolderId, 
                         fileName: file.name
                     });
                     
