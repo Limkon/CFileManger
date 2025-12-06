@@ -21,6 +21,8 @@
         <div class="user-controls">
             <button id="shareMgrBtn" class="icon-btn" title="分享管理" onclick="window.location.href='/shares'"><i class="fas fa-share-alt-square"></i></button>
             
+            <button id="changePasswordBtn" class="icon-btn" title="修改密码"><i class="fas fa-key"></i></button>
+
             <button id="trashBtn" class="icon-btn" title="回收站"><i class="fas fa-trash"></i></button>
             <button id="logoutBtn" class="icon-btn" title="退出登录"><i class="fas fa-sign-out-alt"></i></button>
         </div>
@@ -205,6 +207,24 @@
         </div>
     </div>
 
+    <div id="changePasswordModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <span class="close-button" id="closeChangePasswordBtn">&times;</span>
+            <h3>修改密码</h3>
+            <form id="changePasswordForm">
+                <div class="form-group">
+                    <label>旧密码:</label>
+                    <input type="password" id="oldPasswordInput" class="form-control" placeholder="请输入当前密码">
+                </div>
+                <div class="form-group">
+                    <label>新密码:</label>
+                    <input type="password" id="newPasswordInput" class="form-control" placeholder="请输入新密码">
+                </div>
+                <button type="button" id="submitChangePasswordBtn" class="btn primary-btn full-width">确认修改</button>
+            </form>
+        </div>
+    </div>
+
     <div id="dropZoneOverlay" class="drop-overlay">
         <div class="drop-message">
             <i class="fas fa-cloud-upload-alt"></i>
@@ -214,4 +234,3 @@
 
 </body>
 </html>
-
