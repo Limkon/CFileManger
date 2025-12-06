@@ -154,13 +154,15 @@
         <h3><i class="fas fa-tools"></i> 维护工具</h3>
         
         <div class="form-group">
-            <label>设置用户存储配额 (Bytes):</label>
+            <label>设置用户存储配额 (GB):</label>
             <div class="form-row">
                 <div class="form-group">
-                    <select id="quotaUserSelect" class="form-control"></select>
+                    <select id="quotaUserSelect" class="form-control">
+                        <option value="">-- 选择用户 --</option>
+                    </select>
                 </div>
                 <div class="form-group">
-                    <input type="number" id="quotaValue" class="form-control" placeholder="1073741824 (1GB)">
+                    <input type="number" id="quotaValue" class="form-control" placeholder="例如 1 或 0.5">
                 </div>
                 <div class="form-group" style="flex: 0 0 auto;">
                     <button class="btn warning-btn" onclick="setQuota()">设置配额</button>
@@ -202,7 +204,21 @@
     const telegramSection = document.getElementById('telegramSection');
     const currentModeLabel = document.getElementById('currentModeLabel');
 
+    // 存储当前用户列表数据，用于切换选择时自动填充配额
+    let cachedUsers = [];
+
     storageSelect.addEventListener('change', updateUI);
+
+    // 监听用户选择变化，自动填入当前配额
+    document.getElementById('quotaUserSelect').addEventListener('change', function() {
+        const userId = this.value;
+        const user = cachedUsers.find(u => u.id == userId);
+        if (user) {
+            const gb = user.max_storage_bytes === 0 ? 0 : (user.max_storage_bytes / (1024 * 1024 * 1024));
+            // 保留最多2位小数，如果是整数则不显示小数
+            document.getElementById('quotaValue').value = Math.round(gb * 100) / 100;
+        }
+    });
 
     function updateUI() {
         const mode = storageSelect.value;
@@ -323,9 +339,10 @@
         try {
             const res = await axios.get('/api/admin/users-with-quota');
             const users = res.data.users || [];
+            cachedUsers = users; // 缓存用户列表供配额换算使用
             
             listEl.innerHTML = '';
-            quotaSel.innerHTML = '';
+            quotaSel.innerHTML = '<option value="">-- 选择用户 --</option>';
             scanSel.innerHTML = '';
 
             users.forEach(u => {
@@ -339,7 +356,8 @@
                         <span style="font-size:0.8rem; color:#999;">已用: ${formatSize(u.used_storage_bytes)} / 配额: ${u.max_storage_bytes == 0 ? '无限' : formatSize(u.max_storage_bytes)}</span>
                     </div>
                     <div>
-                        ${!u.is_admin ? `<button class="btn danger-btn" style="padding:2px 8px; font-size:0.8rem;" onclick="delUser(${u.id})">删除</button>` : ''}
+                        <button class="btn warning-btn" style="padding:2px 8px; font-size:0.8rem; margin-right:5px;" onclick="changePassword(${u.id}, '${u.username}')"><i class="fas fa-key"></i> 修改密码</button>
+                        ${!u.is_admin ? `<button class="btn danger-btn" style="padding:2px 8px; font-size:0.8rem;" onclick="delUser(${u.id})"><i class="fas fa-trash"></i> 删除</button>` : ''}
                     </div>
                 `;
                 listEl.appendChild(div);
@@ -365,6 +383,19 @@
         } catch (e) { showMsg('添加失败: ' + (e.response?.data?.message || e.message), 'error'); }
     }
 
+    async function changePassword(id, username) {
+        const newPass = prompt(`请输入用户 "${username}" 的新密码:`);
+        if (newPass === null) return; // Cancelled
+        if (!newPass.trim()) return showMsg('密码不能为空', 'error');
+
+        try {
+            await axios.post('/api/admin/change-password', { userId: id, newPassword: newPass });
+            showMsg(`用户 ${username} 密码已修改`);
+        } catch (e) {
+            showMsg('修改失败: ' + (e.response?.data?.message || e.message), 'error');
+        }
+    }
+
     async function delUser(id) {
         if(!confirm('确定要删除该用户吗？其文件将被保留在数据库中（孤立）。')) return;
         try {
@@ -376,10 +407,18 @@
 
     async function setQuota() {
         const uid = document.getElementById('quotaUserSelect').value;
-        const limit = document.getElementById('quotaValue').value;
-        if(!uid) return;
+        const limitGB = document.getElementById('quotaValue').value;
+        if(!uid) return showMsg('请选择用户', 'error');
+        
+        // 转换 GB 为 Bytes (1 GB = 1024 * 1024 * 1024 Bytes)
+        // 如果输入为 0 或空，则设为 0（无限）
+        let maxBytes = 0;
+        if (limitGB && parseFloat(limitGB) > 0) {
+            maxBytes = Math.floor(parseFloat(limitGB) * 1024 * 1024 * 1024);
+        }
+
         try {
-            await axios.post('/api/admin/set-quota', { userId: uid, maxBytes: parseInt(limit) || 0 });
+            await axios.post('/api/admin/set-quota', { userId: uid, maxBytes: maxBytes });
             showMsg('配额已更新');
             loadUsers();
         } catch(e) { showMsg('设置失败', 'error'); }
