@@ -1,4 +1,3 @@
-// src/worker.js
 import { Hono } from 'hono';
 import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { serveStatic } from 'hono/cloudflare-workers';
@@ -12,7 +11,9 @@ import { initCrypto, encrypt, decrypt } from './crypto.js';
 
 const app = new Hono();
 
-// ... (错误处理和静态资源路由保持不变) ...
+// =================================================================================
+// 1. 全局错误处理
+// =================================================================================
 app.onError((err, c) => {
     console.error('❌ [FATAL] Server Error:', err);
     if (c.req.path.startsWith('/api') || c.req.header('accept')?.includes('json')) {
@@ -21,15 +22,22 @@ app.onError((err, c) => {
     return c.text(`❌ 系统严重错误 (500):\n\n${err.message}\n\nStack:\n${err.stack}`, 500);
 });
 
+// =================================================================================
+// 2. 静态页面路由
+// =================================================================================
 app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
 app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
 app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
+// 分享页面模板 (压缩过的 HTML 字符串)
 const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加載...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加載失敗');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>錯誤</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密碼保護</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="請輸入密碼" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解鎖</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>時間: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下載文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夾)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
 app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 
+// =================================================================================
+// 3. 环境初始化中间件
+// =================================================================================
 app.use('*', async (c, next) => {
     try {
         if (!c.env.DB) throw new Error("缺少 D1 数据库绑定 (DB)");
@@ -48,6 +56,7 @@ app.use('*', async (c, next) => {
             c.set('storage', storage);
         } catch (storageErr) {
             console.warn("⚠️ 存储初始化警告:", storageErr.message);
+            // 注入伪存储对象，防止应用崩溃，允许进入 Admin 页面进行配置
             c.set('storage', { 
                 list: async () => [], 
                 upload: async () => { throw new Error(`存储配置错误: ${storageErr.message}`); },
@@ -59,6 +68,9 @@ app.use('*', async (c, next) => {
     } catch (e) { throw e; }
 });
 
+// =================================================================================
+// 4. 认证中间件
+// =================================================================================
 const authMiddleware = async (c, next) => {
     const url = new URL(c.req.url);
     const path = url.pathname;
@@ -90,7 +102,10 @@ const adminMiddleware = async (c, next) => {
     await next();
 };
 
-// ... (Setup, Login, Register 路由保持不变) ...
+// =================================================================================
+// 5. 核心业务路由 (Setup, Login, Register)
+// =================================================================================
+
 app.get('/setup', async (c) => {
     try {
         await c.get('db').initDB();
@@ -144,6 +159,7 @@ app.get('/', async (c) => {
     const db = c.get('db'); const user = c.get('user');
     let root = await data.getRootFolder(db, user.id);
     if (!root) {
+        // 如果根目录不存在，尝试修复
         await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
         await data.createFolder(db, '/', null, user.id);
         root = await data.getRootFolder(db, user.id);
@@ -152,7 +168,10 @@ app.get('/', async (c) => {
 });
 app.get('/fix-root', async (c) => c.redirect('/'));
 
-// ... (文件操作 API 保持不变) ...
+// =================================================================================
+// 6. 文件操作 API
+// =================================================================================
+
 app.get('/api/folder/:encryptedId', async (c) => {
     try {
         const id = parseInt(decrypt(c.req.param('encryptedId')));
@@ -162,7 +181,9 @@ app.get('/api/folder/:encryptedId', async (c) => {
         return c.json({ contents: res, path });
     } catch (e) { return c.json({ success: false, message: e.message }, 500); }
 });
+
 app.get('/api/folders', async (c) => c.json(await data.getAllFolders(c.get('db'), c.get('user').id)));
+
 app.post('/upload', async (c) => {
     console.log("🚀 [Upload] 收到上传请求");
     const db = c.get('db'); 
@@ -230,6 +251,7 @@ app.post('/upload', async (c) => {
         return c.json({success:false, message:e.message}, 500);
     }
 });
+
 app.get('/download/proxy/:messageId', async (c) => {
     const user = c.get('user');
     const files = await data.getFilesByIds(c.get('db'), [BigInt(c.req.param('messageId'))], user.id);
@@ -242,6 +264,7 @@ app.get('/download/proxy/:messageId', async (c) => {
         return new Response(stream, { headers: h });
     } catch(e) { return c.text(e.message, 500); }
 });
+
 app.post('/api/move', async (c) => {
     const { files, folders, targetFolderId, conflictMode } = await c.req.json();
     const tid = parseInt(decrypt(targetFolderId));
@@ -251,12 +274,15 @@ app.post('/api/move', async (c) => {
         return c.json({success:true});
     } catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
+
 app.get('/api/user/quota', async (c) => c.json(await data.getUserQuota(c.get('db'), c.get('user').id)));
+
 app.post('/api/folder/create', async (c) => {
     const { name, parentId } = await c.req.json();
     await data.createFolder(c.get('db'), name, parentId ? parseInt(decrypt(parentId)) : null, c.get('user').id);
     return c.json({ success: true });
 });
+
 app.post('/api/delete', async (c) => {
     const { files, folders, permanent } = await c.req.json();
     const fIds = (files||[]).map(BigInt); const dIds = (folders||[]).map(parseInt);
@@ -264,31 +290,40 @@ app.post('/api/delete', async (c) => {
     else await data.softDeleteItems(c.get('db'), fIds, dIds, c.get('user').id);
     return c.json({success:true});
 });
+
 app.get('/api/trash', async (c) => c.json(await data.getTrashContents(c.get('db'), c.get('user').id)));
+
 app.post('/api/trash/restore', async (c) => {
     const { files, folders } = await c.req.json();
     await data.restoreItems(c.get('db'), (files||[]).map(BigInt), (folders||[]).map(parseInt), c.get('user').id);
     return c.json({ success: true });
 });
+
 app.post('/api/trash/empty', async (c) => c.json(await data.emptyTrash(c.get('db'), c.get('storage'), c.get('user').id)));
+
 app.post('/api/rename', async (c) => {
     const { type, id, name } = await c.req.json();
     if(type==='file') await data.renameFile(c.get('db'), c.get('storage'), BigInt(id), name, c.get('user').id);
     else await data.renameFolder(c.get('db'), c.get('storage'), parseInt(id), name, c.get('user').id);
     return c.json({success:true});
 });
+
 app.get('/api/search', async (c) => c.json(await data.searchItems(c.get('db'), c.req.query('q'), c.get('user').id)));
+
 app.get('/api/shares', async (c) => c.json(await data.getActiveShares(c.get('db'), c.get('user').id)));
+
 app.post('/api/share/create', async (c) => {
     const body = await c.req.json();
     const res = await data.createShareLink(c.get('db'), body.itemId, body.itemType, body.expiresIn, c.get('user').id, body.password, body.customExpiresAt);
     return res.success ? c.json({success:true, link:`/share/view/${body.itemType}/${res.token}`}) : c.json(res, 500);
 });
+
 app.post('/api/share/cancel', async (c) => {
     const body = await c.req.json();
     await data.cancelShare(c.get('db'), body.itemId, body.itemType, c.get('user').id);
     return c.json({success:true});
 });
+
 app.post('/api/folder/lock', async (c) => {
     const body = await c.req.json();
     const bcrypt = await import('bcryptjs');
@@ -297,7 +332,7 @@ app.post('/api/folder/lock', async (c) => {
 });
 
 // =================================================================================
-// 7. 管理员 API (Admin Routes)
+// 7. 管理员 API
 // =================================================================================
 
 app.get('/api/admin/users', adminMiddleware, async (c) => {
@@ -391,6 +426,9 @@ app.post('/api/admin/set-quota', adminMiddleware, async (c) => {
     return c.json({success:true});
 });
 
+// =================================================================================
+// 8. 静态资源兜底
+// =================================================================================
 app.use('/*', serveStatic({ root: './', manifest }));
 
 export default app;
