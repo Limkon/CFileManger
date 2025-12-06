@@ -224,8 +224,6 @@ export async function createFolder(db, name, parentId, userId) {
                 // 2. 檢查記錄是否已刪除 (deleted_at 不為 NULL 表示在回收站中)
                 if (row.deleted_at !== null) {
                     // 是已刪除的文件夾，執行復原操作：清除 deleted_at 並設置 is_deleted = 0
-                    // 注意：这里是新建文件夹逻辑，如果复原需要处理重命名冲突（createFolder一般作为新建，如果已存在回收站，直接复原可能覆盖，这里保持原逻辑，因为新建通常期望空文件夹）
-                    // 但为了安全，还是保留抛出错误或复原空文件夹
                     await db.run("UPDATE folders SET is_deleted = 0, deleted_at = NULL WHERE id = ?", [row.id]); 
                     return { success: true, id: row.id, restored: true };
                 } else {
@@ -548,9 +546,20 @@ export async function cancelShare(db, itemId, itemType, userId) {
 
 export async function getActiveShares(db, userId) {
     const now = Date.now();
-    const files = await db.all(`SELECT ${SAFE_SELECT_ID_AS_TEXT}, fileName as name, 'file' as type, share_token, share_expires_at FROM files WHERE share_token IS NOT NULL AND (share_expires_at IS NULL OR share_expires_at > ?) AND user_id = ?`, [now, userId]);
-    const folders = await db.all(`SELECT id, name, 'folder' as type, share_token, share_expires_at FROM folders WHERE share_token IS NOT NULL AND (share_expires_at IS NULL OR share_expires_at > ?) AND user_id = ?`, [now, userId]);
-    return [...files, ...folders];
+    // 增加 folder_id 查询
+    const files = await db.all(`SELECT ${SAFE_SELECT_ID_AS_TEXT}, fileName as name, 'file' as type, share_token, share_expires_at, folder_id as parent_id FROM files WHERE share_token IS NOT NULL AND (share_expires_at IS NULL OR share_expires_at > ?) AND user_id = ?`, [now, userId]);
+    // 增加 parent_id 查询
+    const folders = await db.all(`SELECT id, name, 'folder' as type, share_token, share_expires_at, parent_id FROM folders WHERE share_token IS NOT NULL AND (share_expires_at IS NULL OR share_expires_at > ?) AND user_id = ?`, [now, userId]);
+    
+    const results = [...files, ...folders];
+    // 加密 parent_id
+    return results.map(item => {
+        let pid = item.parent_id;
+        return {
+            ...item,
+            encrypted_parent_id: pid ? encrypt(pid) : null
+        };
+    });
 }
 
 export async function setFolderPassword(db, folderId, password, userId) {
