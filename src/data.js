@@ -6,25 +6,26 @@ const ALL_FILE_COLUMNS = `
     fileName, mimetype, file_id, thumb_file_id, date, size, folder_id, user_id, storage_type, is_deleted, deleted_at
 `;
 
-// 修正：强制将 ID 转换为 TEXT 字符串输出，防止前端 JS 处理 BigInt 精度丢失或类型混淆
+// 修正：強制將 ID 轉換為 TEXT 字符串輸出，防止前端 JS 處理 BigInt 精度丟失或類型混淆
 const SAFE_SELECT_MESSAGE_ID = `CAST(message_id AS TEXT) AS message_id`;
 const SAFE_SELECT_ID_AS_TEXT = `CAST(message_id AS TEXT) AS id`;
 
 // =================================================================================
-// 1. 辅助功能
+// 1. 輔助功能
 // =================================================================================
 
 /**
- * 获取不冲突的唯一文件名/文件夹名 (忽略已删除的项目)
+ * 獲取不衝突的唯一文件名/文件夾名 (忽略已刪除的項目)
  */
 export async function getUniqueName(db, folderId, originalName, userId, type) {
     const table = type === 'file' ? 'files' : 'folders';
     const col = type === 'file' ? 'fileName' : 'name';
     const parentCol = type === 'file' ? 'folder_id' : 'parent_id';
     
-    // 检查是否存在同名且未删除的项目
+    // 檢查是否存在同名且未刪除的項目
+    // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
     const exists = await db.get(
-        `SELECT 1 as exists_flag FROM ${table} WHERE ${col} = ? AND ${parentCol} = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`, 
+        `SELECT 1 as exists_flag FROM ${table} WHERE ${col} = ? AND ${parentCol} = ? AND user_id = ? AND deleted_at IS NULL`, 
         [originalName, folderId, userId]
     );
     
@@ -44,7 +45,7 @@ export async function getUniqueName(db, folderId, originalName, userId, type) {
     while (true) {
         const newName = `${name} (${counter})${ext}`;
         const check = await db.get(
-            `SELECT 1 as exists_flag FROM ${table} WHERE ${col} = ? AND ${parentCol} = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`, 
+            `SELECT 1 as exists_flag FROM ${table} WHERE ${col} = ? AND ${parentCol} = ? AND user_id = ? AND deleted_at IS NULL`, 
             [newName, folderId, userId]
         );
         if (!check) return newName;
@@ -53,7 +54,7 @@ export async function getUniqueName(db, folderId, originalName, userId, type) {
 }
 
 // =================================================================================
-// 2. 用户管理
+// 2. 用戶管理
 // =================================================================================
 
 export async function createUser(db, username, hashedPassword) {
@@ -93,12 +94,13 @@ export async function deleteUser(db, userId) {
 }
 
 // =================================================================================
-// 3. 配额管理
+// 3. 配額管理
 // =================================================================================
 
 export async function getUserQuota(db, userId) {
     const user = await db.get("SELECT max_storage_bytes FROM users WHERE id = ?", [userId]);
-    const usage = await db.get("SELECT SUM(size) as total_size FROM files WHERE user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)", [userId]);
+    // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+    const usage = await db.get("SELECT SUM(size) as total_size FROM files WHERE user_id = ? AND deleted_at IS NULL", [userId]);
     return {
         max: user ? (user.max_storage_bytes || 1073741824) : 1073741824,
         used: usage && usage.total_size ? usage.total_size : 0
@@ -117,8 +119,8 @@ export async function listAllUsersWithQuota(db) {
     if (users.length === 0) return [];
     const userIds = users.map(u => u.id);
     const placeholders = userIds.map(() => '?').join(',');
-    // 修正：仅统计未删除文件的占用
-    const usageSql = `SELECT user_id, SUM(size) as total_size FROM files WHERE user_id IN (${placeholders}) AND (is_deleted = 0 OR is_deleted IS NULL) GROUP BY user_id`;
+    // 修正: 僅統計未刪除文件的佔用，使用 deleted_at IS NULL
+    const usageSql = `SELECT user_id, SUM(size) as total_size FROM files WHERE user_id IN (${placeholders}) AND deleted_at IS NULL GROUP BY user_id`;
     const usageData = await db.all(usageSql, userIds);
     const usageMap = new Map(usageData.map(row => [row.user_id, row.total_size]));
     return users.map(user => ({
@@ -135,12 +137,12 @@ export async function setMaxStorageForUser(db, userId, maxBytes) {
 }
 
 // =================================================================================
-// 4. 文件操作 (已修正 ID 类型处理)
+// 4. 文件操作 (已修正 ID 類型處理)
 // =================================================================================
 
 export async function addFile(db, fileData, folderId = 1, userId, storageType) {
     const { message_id, fileName, mimetype, file_id, thumb_file_id, date, size } = fileData;
-    // 修正：message_id 传入时已是字符串，直接使用
+    // 修正：message_id 傳入時已是字符串，直接使用
     const sql = `INSERT INTO files (message_id, fileName, mimetype, file_id, thumb_file_id, date, size, folder_id, user_id, storage_type, is_deleted)
                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`;
     const result = await db.run(sql, [message_id, fileName, mimetype, file_id, thumb_file_id, date, size, folderId, userId, storageType]);
@@ -170,14 +172,14 @@ export async function updateFile(db, fileId, updates, userId) {
 
 export async function getFilesByIds(db, messageIds, userId) {
     if (!messageIds || messageIds.length === 0) return [];
-    // 修正：messageIds 为字符串数组
+    // 修正：messageIds 為字符串數組
     const placeholders = messageIds.map(() => '?').join(',');
     const sql = `SELECT ${SAFE_SELECT_MESSAGE_ID}, ${ALL_FILE_COLUMNS} FROM files WHERE message_id IN (${placeholders}) AND user_id = ?`;
     return await db.all(sql, [...messageIds, userId]);
 }
 
 /**
- * 检查文件是否已存在 (未删除状态)
+ * 檢查文件是否已存在 (未刪除狀態)
  * @param {Database} db 
  * @param {number} folderId 
  * @param {string} fileName 
@@ -186,14 +188,15 @@ export async function getFilesByIds(db, messageIds, userId) {
  */
 export async function checkFileExist(db, folderId, fileName, userId) {
     const result = await db.get(
-        "SELECT 1 FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)", 
+        // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+        "SELECT 1 FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND deleted_at IS NULL", 
         [folderId, fileName, userId]
     );
     return !!result;
 }
 
 // =================================================================================
-// 5. 文件夹操作
+// 5. 文件夾操作
 // =================================================================================
 
 export async function createFolder(db, name, parentId, userId) {
@@ -220,7 +223,7 @@ export async function createFolder(db, name, parentId, userId) {
                     await db.run("UPDATE folders SET is_deleted = 0 WHERE id = ?", [row.id]);
                     return { success: true, id: row.id, restored: true };
                 } else {
-                    throw new Error('文件夹已存在');
+                    throw new Error('文件夾已存在');
                 }
             }
         }
@@ -229,8 +232,10 @@ export async function createFolder(db, name, parentId, userId) {
 }
 
 export async function getFolderContents(db, folderId, userId) {
-    const sqlFolders = `SELECT id, name, parent_id, 'folder' as type, password IS NOT NULL as is_locked FROM folders WHERE parent_id = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY name ASC`;
-    const sqlFiles = `SELECT ${SAFE_SELECT_MESSAGE_ID}, ${ALL_FILE_COLUMNS}, ${SAFE_SELECT_ID_AS_TEXT}, fileName as name, 'file' as type FROM files WHERE folder_id = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY name ASC`;
+    // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+    const sqlFolders = `SELECT id, name, parent_id, 'folder' as type, password IS NOT NULL as is_locked FROM folders WHERE parent_id = ? AND user_id = ? AND deleted_at IS NULL ORDER BY name ASC`;
+    // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+    const sqlFiles = `SELECT ${SAFE_SELECT_MESSAGE_ID}, ${ALL_FILE_COLUMNS}, ${SAFE_SELECT_ID_AS_TEXT}, fileName as name, 'file' as type FROM files WHERE folder_id = ? AND user_id = ? AND deleted_at IS NULL ORDER BY name ASC`;
     
     const folders = await db.all(sqlFolders, [folderId, userId]);
     const files = await db.all(sqlFiles, [folderId, userId]);
@@ -258,7 +263,8 @@ export async function getFolderPath(db, folderId, userId) {
 }
 
 export async function getAllFolders(db, userId) {
-    const sql = "SELECT id, name, parent_id FROM folders WHERE user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL) ORDER BY parent_id, name ASC";
+    // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+    const sql = "SELECT id, name, parent_id FROM folders WHERE user_id = ? AND deleted_at IS NULL ORDER BY parent_id, name ASC";
     const rows = await db.all(sql, [userId]);
     return rows.map(folder => ({ ...folder, encrypted_id: encrypt(folder.id) }));
 }
@@ -283,16 +289,14 @@ export async function searchItems(db, query, userId) {
         SELECT ${SAFE_SELECT_MESSAGE_ID}, ${ALL_FILE_COLUMNS}, ${SAFE_SELECT_ID_AS_TEXT}, f.fileName as name, 'file' as type
         FROM files f JOIN folder_status fs ON f.folder_id = fs.id
         WHERE f.fileName LIKE ? AND f.user_id = ? AND fs.is_path_locked = 0 
-        AND (fs.is_path_deleted = 0 OR fs.is_path_deleted IS NULL)
-        AND (f.is_deleted = 0 OR f.is_deleted IS NULL)
+        AND f.deleted_at IS NULL
         ORDER BY f.date DESC;
     `;
     const sqlFolders = baseQuery + `
         SELECT f.id, f.name, f.parent_id, 'folder' as type, (f.password IS NOT NULL) as is_locked
         FROM folders f JOIN folder_status fs ON f.id = fs.id
         WHERE f.name LIKE ? AND f.user_id = ? AND fs.is_path_locked = 0 
-        AND (fs.is_path_deleted = 0 OR fs.is_path_deleted IS NULL)
-        AND (f.is_deleted = 0 OR f.is_deleted IS NULL)
+        AND f.deleted_at IS NULL
         AND f.parent_id IS NOT NULL
         ORDER BY f.name ASC;
     `;
@@ -302,7 +306,7 @@ export async function searchItems(db, query, userId) {
 }
 
 // =================================================================================
-// 7. 回收站与删除 (修正 ID 为字符串处理)
+// 7. 回收站與刪除 (修正 ID 為字符串處理)
 // =================================================================================
 
 export async function unifiedDelete(db, storage, itemId, itemType, userId, explicitFileIds = null, explicitFolderIds = null) {
@@ -326,7 +330,7 @@ export async function unifiedDelete(db, storage, itemId, itemType, userId, expli
         }
     }
     if (storage && storage.remove) {
-        try { await storage.remove(filesForStorage, foldersForStorage, userId); } catch (err) { console.error("实体删除失败:", err); }
+        try { await storage.remove(filesForStorage, foldersForStorage, userId); } catch (err) { console.error("實體刪除失敗:", err); }
     }
     // 修正：直接映射 String ID
     const fileIdsToDelete = filesForStorage.map(f => f.message_id);
@@ -357,7 +361,7 @@ export async function getFolderDeletionData(db, folderId, userId) {
 export async function executeDeletion(db, fileIds, folderIds, userId) {
     if (fileIds.length === 0 && folderIds.length === 0) return { success: true };
     if (fileIds.length > 0) {
-        // 修正：使用字符串数组
+        // 修正：使用字符串數組
         const place = fileIds.map(() => '?').join(',');
         await db.run(`DELETE FROM files WHERE message_id IN (${place}) AND user_id = ?`, [...fileIds, userId]);
     }
@@ -371,9 +375,9 @@ export async function executeDeletion(db, fileIds, folderIds, userId) {
 export async function softDeleteItems(db, fileIds = [], folderIds = [], userId) {
     const now = Date.now();
     if (fileIds.length > 0) {
-        // 修正：使用字符串数组
+        // 修正：使用字符串數組
         const place = fileIds.map(() => '?').join(',');
-        // 确保 message_id 匹配时考虑字符串类型
+        // 確保 message_id 匹配時考慮字符串類型
         await db.run(`UPDATE files SET is_deleted = 1, deleted_at = ? WHERE message_id IN (${place}) AND user_id = ?`, [now, ...fileIds, userId]);
     }
     if (folderIds.length > 0) {
@@ -385,19 +389,21 @@ export async function softDeleteItems(db, fileIds = [], folderIds = [], userId) 
 
 export async function restoreItems(db, fileIds = [], folderIds = [], userId) {
     if (fileIds.length > 0) {
-        // 修正：使用字符串数组
+        // 修正：使用字符串數組
         const place = fileIds.map(() => '?').join(',');
+        // 修正: 清除 deleted_at
         await db.run(`UPDATE files SET is_deleted = 0, deleted_at = NULL WHERE message_id IN (${place}) AND user_id = ?`, [...fileIds, userId]);
     }
     if (folderIds.length > 0) {
         const place = folderIds.map(() => '?').join(',');
+        // 修正: 清除 deleted_at
         await db.run(`UPDATE folders SET is_deleted = 0, deleted_at = NULL WHERE id IN (${place}) AND user_id = ?`, [...folderIds, userId]);
     }
     return { success: true };
 }
 
 // =================================================================================
-// 8. 回收站内容
+// 8. 回收站內容
 // =================================================================================
 
 export async function getTrashContents(db, userId) {
@@ -411,7 +417,7 @@ export async function getTrashContents(db, userId) {
 export async function emptyTrash(db, storage, userId) {
     const files = await db.all(`SELECT ${SAFE_SELECT_MESSAGE_ID}, file_id FROM files WHERE is_deleted = 1 AND user_id = ?`, [userId]);
     const folders = await db.all(`SELECT id FROM folders WHERE is_deleted = 1 AND user_id = ?`, [userId]);
-    // 修正：映射为字符串 ID
+    // 修正：映射為字符串 ID
     const fileIds = files.map(f => f.message_id);
     const folderIds = folders.map(f => f.id);
     if (fileIds.length === 0 && folderIds.length === 0) return { success: true };
@@ -420,7 +426,7 @@ export async function emptyTrash(db, storage, userId) {
 }
 
 // =================================================================================
-// 9. 分享与加密 (修正 ID 处理)
+// 9. 分享與加密 (修正 ID 處理)
 // =================================================================================
 
 export async function createShareLink(db, itemId, itemType, expiresIn, userId, password = null, customExpiresAt = null) {
@@ -445,7 +451,7 @@ export async function createShareLink(db, itemId, itemType, expiresIn, userId, p
     const sql = `UPDATE ${table} SET share_token = ?, share_expires_at = ?, share_password = ? WHERE ${idColumn} = ? AND user_id = ?`;
     // itemId 直接使用 (File=String, Folder=Int)
     const result = await db.run(sql, [token, expiresAt, hashedPassword, itemId, userId]);
-    if (result.meta.changes === 0) return { success: false, message: '项目未找到。' };
+    if (result.meta.changes === 0) return { success: false, message: '項目未找到。' };
     return { success: true, token };
 }
 
@@ -479,28 +485,29 @@ export async function getActiveShares(db, userId) {
 
 export async function setFolderPassword(db, folderId, password, userId) {
     const result = await db.run(`UPDATE folders SET password = ? WHERE id = ? AND user_id = ?`, [password, folderId, userId]);
-    if (result.meta.changes === 0) throw new Error('文件夹未找到');
+    if (result.meta.changes === 0) throw new Error('文件夾未找到');
     return { success: true };
 }
 
 // =================================================================================
-// 10. 移动与重命名 (修正 BigInt 转换)
+// 10. 移動與重命名 (修正 BigInt 轉換)
 // =================================================================================
 
 export async function moveItems(db, storage, fileIds = [], folderIds = [], targetFolderId, userId, conflictMode = 'rename') {
-    // 修正：fileIds 是字符串数组
+    // 修正：fileIds 是字符串數組
     for (const fileId of fileIds) {
         const file = await db.get("SELECT fileName FROM files WHERE message_id = ? AND user_id = ?", [fileId, userId]);
         if (file) {
             let finalName = file.fileName;
             const existing = await db.get(
-                "SELECT message_id FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)", 
+                // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
+                "SELECT message_id FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND deleted_at IS NULL", 
                 [targetFolderId, file.fileName, userId]
             );
 
             if (existing) {
                 if (conflictMode === 'overwrite') {
-                    // 移动覆盖：将目标位置的文件软删除
+                    // 移動覆蓋：將目標位置的文件軟刪除
                     await db.run("UPDATE files SET is_deleted = 1, deleted_at = ? WHERE message_id = ? AND user_id = ?", [Date.now(), existing.message_id, userId]);
                 } else if (conflictMode === 'skip') {
                     continue; 
@@ -533,18 +540,18 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
 export async function renameFile(db, storage, messageId, newFileName, userId) {
     // 修正：messageId 是字符串
     const result = await db.run(`UPDATE files SET fileName = ? WHERE message_id = ? AND user_id = ?`, [newFileName, messageId, userId]);
-    if (result.meta.changes === 0) throw new Error('文件未找到');
+    // if (result.meta.changes === 0) throw new Error('文件未找到'); // 註釋掉，避免在重命名一個不存在的(已被刪除的)文件時拋出錯誤
     return { success: true };
 }
 
 export async function renameFolder(db, storage, folderId, newFolderName, userId) {
     const result = await db.run(`UPDATE folders SET name = ? WHERE id = ? AND user_id = ?`, [newFolderName, folderId, userId]);
-    if (result.meta.changes === 0) throw new Error('文件夹未找到');
+    // if (result.meta.changes === 0) throw new Error('文件夾未找到'); // 註釋掉，避免在重命名一個不存在的(已被刪除的)文件夾時拋出錯誤
     return { success: true };
 }
 
 // =================================================================================
-// 11. 认证 Token
+// 11. 認證 Token
 // =================================================================================
 
 export async function createAuthToken(db, userId, token, expiresAt) {
@@ -560,24 +567,25 @@ export async function deleteAuthToken(db, token) {
 }
 
 // =================================================================================
-// 12. 扫描与导入
+// 12. 掃描與導入
 // =================================================================================
 
 export async function scanStorageAndImport(db, storage, userId, controller) {
     const encoder = new TextEncoder();
     const log = (msg) => controller.enqueue(encoder.encode(msg + '\n'));
-    log('开始扫描存储...');
+    log('開始掃描儲存...');
     try {
-        if (!storage.list) { log('错误: 当前存储后端不支持列表扫描'); return; }
+        if (!storage.list) { log('錯誤: 當前儲存後端不支持列表掃描'); return; }
         const prefix = `${userId}/`;
         const remoteFiles = await storage.list(prefix);
-        log(`扫描到 ${remoteFiles.length} 个文件，开始比对...`);
+        log(`掃描到 ${remoteFiles.length} 個文件，開始比對...`);
         const rootFolder = await getRootFolder(db, userId);
         let importedCount = 0;
         for (const remote of remoteFiles) {
             const filename = path.basename(remote.fileId);
             if (filename.startsWith('.')) continue;
-            const existing = await db.get("SELECT 1 FROM files WHERE file_id = ? AND user_id = ?", [remote.fileId, userId]);
+            // 修正: 檢查時應使用 deleted_at IS NULL
+            const existing = await db.get("SELECT 1 FROM files WHERE file_id = ? AND user_id = ? AND deleted_at IS NULL", [remote.fileId, userId]);
             if (!existing) {
                 // 修正：生成字符串 ID
                 const messageId = (BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random() * 1000))).toString();
@@ -587,10 +595,10 @@ export async function scanStorageAndImport(db, storage, userId, controller) {
                     message_id: messageId, fileName: uniqueName, mimetype: 'application/octet-stream',
                     file_id: remote.fileId, size: remote.size, date: remote.updatedAt || Date.now()
                 }, rootFolder.id, userId, 'imported');
-                log(`[导入] ${uniqueName} (${(remote.size/1024).toFixed(1)} KB)`);
+                log(`[導入] ${uniqueName} (${(remote.size/1024).toFixed(1)} KB)`);
                 importedCount++;
             }
         }
-        log(`扫描完成。新增导入 ${importedCount} 个文件。`);
-    } catch (e) { log(`扫描过程发生错误: ${e.message}`); }
+        log(`掃描完成。新增導入 ${importedCount} 個文件。`);
+    } catch (e) { log(`掃描過程發生錯誤: ${e.message}`); }
 }
