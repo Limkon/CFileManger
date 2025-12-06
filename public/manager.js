@@ -56,7 +56,10 @@ document.addEventListener('DOMContentLoaded', () => {
     let isMultiSelectMode = false; 
     let viewMode = localStorage.getItem('viewMode') || 'grid'; 
     let isTrashMode = false;
+    
+    // 冲突解决状态 (用于上传队列)
     let conflictResolutionState = { applyToAll: false, choice: null };
+    
     let selectedMoveTargetId = null;
 
     // --- DOM 引用 ---
@@ -182,7 +185,37 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // 2. 右键菜单逻辑
+    // 2. 冲突解决弹窗函数
+    function showConflictModal(message) {
+        return new Promise((resolve) => {
+            conflictMessage.textContent = message;
+            conflictModal.style.display = 'block';
+            
+            // 重置复选框
+            if (applyToAllCheckbox) applyToAllCheckbox.checked = false;
+
+            const cleanup = () => {
+                conflictModal.style.display = 'none';
+                conflictRenameBtn.onclick = null;
+                conflictOverwriteBtn.onclick = null;
+                conflictSkipBtn.onclick = null;
+                conflictCancelBtn.onclick = null;
+            };
+
+            const handleChoice = (choice) => {
+                const applyToAll = applyToAllCheckbox ? applyToAllCheckbox.checked : false;
+                cleanup();
+                resolve({ choice, applyToAll });
+            };
+
+            conflictRenameBtn.onclick = () => handleChoice('rename');
+            conflictOverwriteBtn.onclick = () => handleChoice('overwrite');
+            conflictSkipBtn.onclick = () => handleChoice('skip');
+            conflictCancelBtn.onclick = () => handleChoice('cancel');
+        });
+    }
+
+    // 3. 右键菜单逻辑
     function showContextMenu(x, y) {
         if(!contextMenu) return;
         const menuWidth = 200; 
@@ -283,7 +316,7 @@ document.addEventListener('DOMContentLoaded', () => {
         showContextMenu(e.clientX, e.clientY);
     }
 
-    // 3. 渲染函数
+    // 4. 渲染函数
     function createGridItem(item) {
         const div = document.createElement('div');
         div.className = 'grid-item item-card';
@@ -307,7 +340,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createListItem(item) {
-        // 修正：使用 tr 元素代替 div，适配 HTML 的 table 结构
         const tr = document.createElement('tr');
         tr.className = 'list-row list-item';
         if(isTrashMode) tr.classList.add('deleted');
@@ -321,7 +353,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const dateStr = item.date ? new Date(item.date).toLocaleString() : (item.deleted_at ? new Date(item.deleted_at).toLocaleString() : '-');
         const sizeStr = item.size !== undefined ? formatSize(item.size) : '-';
 
-        // 修正：使用 td 单元格包裹内容
         tr.innerHTML = `
             <td><div class="list-icon"><i class="${iconClass}" style="color: ${item.type === 'folder' ? '#fbc02d' : '#555'}"></i></div></td>
             <td><div class="list-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div></td>
@@ -346,7 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 4. 其他逻辑函数
+    // 5. 其他逻辑函数
 
     async function updateQuota() {
         try {
@@ -740,34 +771,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // 冲突解决
-    function showConflictModal(fileName) {
-        return new Promise((resolve) => {
-            conflictMessage.textContent = `目标位置已存在文件: "${fileName}"`;
-            conflictModal.style.display = 'block';
-            applyToAllCheckbox.checked = false; 
-
-            const cleanup = () => {
-                conflictModal.style.display = 'none';
-                conflictRenameBtn.onclick = null;
-                conflictOverwriteBtn.onclick = null;
-                conflictSkipBtn.onclick = null;
-                conflictCancelBtn.onclick = null;
-            };
-
-            const handleChoice = (choice) => {
-                const applyToAll = applyToAllCheckbox.checked;
-                cleanup();
-                resolve({ choice, applyToAll });
-            };
-
-            conflictRenameBtn.onclick = () => handleChoice('rename');
-            conflictOverwriteBtn.onclick = () => handleChoice('overwrite');
-            conflictSkipBtn.onclick = () => handleChoice('skip');
-            conflictCancelBtn.onclick = () => handleChoice('cancel');
-        });
-    }
-
     // 移动功能
     if (moveBtn) {
         moveBtn.addEventListener('click', () => {
@@ -858,13 +861,19 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!selectedMoveTargetId) return;
         
         const files = []; const folders = [];
-        const fileNames = []; 
+        // 收集所有移动项的名称和类型用于比对
+        const moveItemsList = []; 
+        
         selectedItems.forEach(id => { 
             const [type, realId] = parseItemId(id); 
             const originalItem = items.find(i => getItemId(i) === id);
             if (originalItem) {
-                if (type === 'file') { files.push(realId); fileNames.push(originalItem.name); } 
-                else { folders.push(realId); }
+                if (type === 'file') { 
+                    files.push(realId); 
+                } else { 
+                    folders.push(realId); 
+                }
+                moveItemsList.push({ type, name: originalItem.name });
             }
         });
         
@@ -872,15 +881,32 @@ document.addEventListener('DOMContentLoaded', () => {
             confirmMoveBtn.textContent = '正在检查冲突...';
             confirmMoveBtn.disabled = true;
             
+            // 1. 获取目标文件夹内容进行比对 (验重)
             const targetRes = await axios.get(`/api/folder/${selectedMoveTargetId}?t=${Date.now()}`);
             const targetContents = targetRes.data.contents;
-            const targetFileNames = new Set(targetContents.files.map(f => f.fileName));
-            const conflicts = fileNames.filter(name => targetFileNames.has(name));
             
-            let conflictMode = 'rename'; 
+            const targetFileNames = new Set(targetContents.files.map(f => f.fileName));
+            const targetFolderNames = new Set(targetContents.folders.map(f => f.name));
+            
+            // 2. 筛选出冲突项
+            const conflicts = moveItemsList.filter(item => {
+                if (item.type === 'file') {
+                    return targetFileNames.has(item.name);
+                } else {
+                    return targetFolderNames.has(item.name);
+                }
+            });
+            
+            let conflictMode = 'rename'; // 默认策略
             
             if (conflicts.length > 0) {
-                const result = await showConflictModal(`检测到 ${conflicts.length} 个同名文件 (例如: ${conflicts[0]})`);
+                // 3. 如果有冲突，显示弹窗让用户选择 (包含覆盖、跳过、重命名、取消以及批量选框)
+                const conflictNames = conflicts.map(c => c.name).slice(0, 3).join(', ');
+                const moreText = conflicts.length > 3 ? ` 等 ${conflicts.length} 个项目` : '';
+                const msg = `目标位置已存在同名项目: "${conflictNames}"${moreText}。`;
+                
+                const result = await showConflictModal(msg);
+                
                 if (result.choice === 'cancel') {
                     confirmMoveBtn.textContent = '确定移动';
                     confirmMoveBtn.disabled = false;
@@ -890,6 +916,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 conflictMode = result.choice;
             }
 
+            // 4. 执行移动，携带用户选择的冲突处理模式
             confirmMoveBtn.textContent = '移动中...';
             TaskManager.show('正在移动...', 'fas fa-arrows-alt'); 
             
@@ -1006,6 +1033,7 @@ document.addEventListener('DOMContentLoaded', () => {
         
         TaskManager.show('准备上传...', 'fas fa-cloud-upload-alt');
 
+        // 重置冲突解决状态
         conflictResolutionState.applyToAll = false;
         conflictResolutionState.choice = null;
 
@@ -1044,7 +1072,7 @@ document.addEventListener('DOMContentLoaded', () => {
                          if (conflictResolutionState.applyToAll && conflictResolutionState.choice) {
                             conflictMode = conflictResolutionState.choice;
                         } else {
-                            const result = await showConflictModal(file.name);
+                            const result = await showConflictModal(`目标位置已存在文件: "${file.name}"`);
                             conflictMode = result.choice;
                             if (result.applyToAll) {
                                 conflictResolutionState.applyToAll = true;
@@ -1167,4 +1195,3 @@ document.addEventListener('DOMContentLoaded', () => {
     loadFolder(currentFolderId);
     updateQuota();
 });
-
