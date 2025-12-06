@@ -1,4 +1,4 @@
-/* public/manager.css - 完整全功能版 */
+/* public/manager.css - 完整全功能版 (已配色) */
 
 :root {
     --primary-color: #007bff;
@@ -6,6 +6,12 @@
     --danger-color: #dc3545;
     --danger-hover: #a71d2a;
     --success-color: #28a745;
+    --warning-color: #ffc107;
+    --info-color: #17a2b8;
+    --purple-color: #6f42c1;
+    --orange-color: #fd7e14;
+    --teal-color: #20c997;
+    
     --bg-color: #f4f6f8;
     --card-bg: #ffffff;
     --text-main: #333;
@@ -58,6 +64,7 @@ body {
 
 .icon-btn {
     padding: 8px; border-radius: 4px; border: 1px solid transparent; background: none; cursor: pointer; color: var(--text-secondary); font-size: 1.1rem;
+    transition: all 0.2s;
 }
 .icon-btn:hover { background: #e9ecef; color: var(--primary-color); }
 .icon-btn.active { background: #e3f2fd; color: var(--primary-color); border-color: #bbdefb; }
@@ -154,7 +161,25 @@ body.auth-page {
 }
 .search-box input:focus { width: 350px; border-color: var(--primary-color); background: #fff; }
 .search-box button { background: none; border: none; cursor: pointer; color: var(--text-secondary); margin-left: -35px; z-index: 1; }
-.user-controls { display: flex; align-items: center; }
+.user-controls { display: flex; align-items: center; gap: 5px; }
+
+/* --- 顶部导航栏按钮专属配色 (新增) --- */
+/* 分享管理 - 绿色 */
+#shareMgrBtn { color: var(--success-color); background-color: rgba(40, 167, 69, 0.1); }
+#shareMgrBtn:hover { background-color: var(--success-color); color: #fff; }
+
+/* 修改密码 - 橙色 */
+#changePasswordBtn { color: var(--orange-color); background-color: rgba(253, 126, 20, 0.1); }
+#changePasswordBtn:hover { background-color: var(--orange-color); color: #fff; }
+
+/* 回收站 - 红色 */
+#trashBtn { color: var(--danger-color); background-color: rgba(220, 53, 69, 0.1); }
+#trashBtn:hover { background-color: var(--danger-color); color: #fff; }
+
+/* 退出登录 - 深灰 */
+#logoutBtn { color: #6c757d; background-color: rgba(108, 117, 125, 0.1); }
+#logoutBtn:hover { background-color: #6c757d; color: #fff; }
+
 
 /* 回收站黄色横幅 */
 .trash-banner {
@@ -168,7 +193,24 @@ body.auth-page {
 /* 工具栏区域 */
 .toolbar { padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
 .left-tools { display: flex; gap: 10px; }
-.right-tools { display: flex; gap: 5px; }
+.right-tools { display: flex; gap: 8px; }
+
+/* --- 工具栏右侧按钮专属配色 (新增) --- */
+/* 多选模式 - 蓝色 */
+#multiSelectToggleBtn { color: var(--primary-color); border-color: var(--border-color); background: #fff; }
+#multiSelectToggleBtn:hover, #multiSelectToggleBtn.active { background-color: var(--primary-color); color: #fff; border-color: var(--primary-color); }
+
+/* 全选 - 青色 */
+#selectAllBtn { color: var(--teal-color); border-color: var(--border-color); background: #fff; }
+#selectAllBtn:hover { background-color: var(--teal-color); color: #fff; border-color: var(--teal-color); }
+
+/* 切换视图 - 紫色 */
+#view-switch-btn { color: var(--purple-color); border-color: var(--border-color); background: #fff; }
+#view-switch-btn:hover { background-color: var(--purple-color); color: #fff; border-color: var(--purple-color); }
+
+/* 刷新按钮 - 普通悬停变色 */
+.left-tools .btn:not(.primary-btn):hover { border-color: var(--primary-color); color: var(--primary-color); }
+
 
 /* 面包屑导航 */
 .breadcrumb-container { padding: 0 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
