@@ -184,29 +184,24 @@ app.get('/api/folder/:encryptedId', async (c) => {
 
 app.get('/api/folders', async (c) => c.json(await data.getAllFolders(c.get('db'), c.get('user').id)));
 
-// === 新增: 文件存在检查 API (逻辑优化版) ===
+// === 新增: 文件存在检查 API (修正 BUG 邏輯) ===
 app.post('/api/file/check', async (c) => {
     try {
         const { folderId, fileName } = await c.req.json();
-        // 解析 folderId (前端传来的通常是加密ID)
+        // 解析 folderId (前端傳來的通常是加密ID)
         const fid = parseInt(decrypt(folderId));
         if (isNaN(fid)) return c.json({ exists: false });
         
         const db = c.get('db');
         const userId = c.get('user').id;
         
-        // 核心修正：查出所有同名文件，然后在代码层判断 is_deleted 状态
-        // 这样可以避免 SQL 逻辑在某些边缘情况下的歧义
-        const files = await db.all(
-            "SELECT is_deleted FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ?", 
+        // 核心修正：使用 deleted_at IS NULL 檢查文件是否處於未刪除狀態
+        const existingActiveFile = await db.get(
+            "SELECT 1 FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND deleted_at IS NULL", 
             [fid, fileName, userId]
         );
         
-        // 只要有一个未删除的同名文件，就视为存在冲突
-        // 注意：SQLite 读取出来的 is_deleted 应该是数字 0 或 1
-        const exists = files.some(f => f.is_deleted === 0 || f.is_deleted === null);
-        
-        return c.json({ exists: exists });
+        return c.json({ exists: !!existingActiveFile });
     } catch (e) {
         console.error("Check file exist error:", e);
         return c.json({ exists: false, error: e.message });
@@ -247,8 +242,9 @@ app.post('/upload', async (c) => {
                 let existing = null;
                 
                 // 如果是 overwrite 模式，需要先查出旧文件记录
+                // 修正: 使用 deleted_at IS NULL 确保只检查活动文件
                 if(conflictMode === 'overwrite') {
-                    existing = await db.get("SELECT * FROM files WHERE fileName=? AND folder_id=? AND user_id=? AND (is_deleted=0 OR is_deleted IS NULL)", [file.name, folderId, user.id]);
+                    existing = await db.get("SELECT * FROM files WHERE fileName=? AND folder_id=? AND user_id=? AND deleted_at IS NULL", [file.name, folderId, user.id]);
                 } else {
                     // rename 模式 (或默认)，获取唯一文件名
                     finalName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
