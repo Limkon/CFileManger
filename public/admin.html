@@ -55,7 +55,7 @@
         <div class="form-group">
             <label>选择当前使用的存储后端:</label>
             <select id="storageModeSelect" class="form-control">
-                <option value="local">本地 / R2 (Workers KV/D1/R2)</option>
+                <option value="" disabled selected>-- 请选择存储后端 --</option>
                 <option value="s3">S3 兼容存储 (AWS, MinIO, OSS 等)</option>
                 <option value="webdav">WebDAV (Alist, Nextcloud 等)</option>
                 <option value="telegram">Telegram Bot (无限容量)</option>
@@ -220,16 +220,6 @@
 
     async function loadSettings() {
         try {
-            // 1. 加载存储模式 (从任意一个配置接口尝试获取模式，或者默认 local)
-            // 由于 API 分散，我们先加载 S3 配置看下 mode
-            try {
-                const s3Res = await axios.get('/api/admin/s3');
-                // 这里有一个假设：config 对象在后端是共享的
-                // 如果后端没有返回 mode，默认保持当前 select 的值或 local
-                // 更好的做法是后端增加一个 /api/admin/config 接口返回所有
-                // 但为了不修改 worker.js 路由，我们通过加载具体配置来推断或手动设置
-            } catch(e){}
-
             // 加载 S3 配置
             try {
                 const res = await axios.get('/api/admin/s3');
@@ -250,8 +240,6 @@
                 document.getElementById('webdavUser').value = dav.username || '';
             } catch(e) {}
 
-            // 加载 Telegram 配置 (此处需要后端支持 get，如果未实现则跳过回显)
-            
             // 加载用户列表
             loadUsers();
 
@@ -263,6 +251,7 @@
 
     async function saveStorageMode() {
         const mode = storageSelect.value;
+        if (!mode) return showMsg('请选择一个存储模式', 'error');
         try {
             await axios.post('/api/admin/storage-mode', { mode });
             showMsg('存储模式已切换为: ' + mode);
@@ -299,9 +288,6 @@
     }
 
     async function saveTelegram() {
-        // 由于 worker.js 可能未显式暴露 telegram 保存接口 (在之前的 worker.js 中未包含)
-        // 如果需要支持，请确保 worker.js 有对应的 POST /api/admin/telegram
-        // 这里仅作为完整性占位，或者假设复用通用 save
         alert("Telegram 配置保存需后端支持，请确认 worker.js 已添加相关路由");
     }
 
