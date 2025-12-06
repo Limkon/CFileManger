@@ -263,7 +263,6 @@ app.get('/download/folder/:encryptedId', async (c) => {
     
     // -------------------------------------------------------------------------
     // ⚠️ ZIP 压缩占位符：
-    // 实际的 ZIP 压缩流创建和文件流合并逻辑在 Workers 中实现非常复杂。
     // 此处返回一个包含文件列表（及其相对路径）的文本文件作为功能占位符。
     // -------------------------------------------------------------------------
 
@@ -341,14 +340,22 @@ app.get('/logout', async (c) => {
     return c.redirect('/login');
 });
 
+// 【已修复】根路由，增加对 root 存在的检查，防止 crash
 app.get('/', async (c) => {
     const db = c.get('db'); const user = c.get('user');
     let root = await data.getRootFolder(db, user.id);
     if (!root) {
+        // 尝试自愈
         await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
         await data.createFolder(db, '/', null, user.id);
         root = await data.getRootFolder(db, user.id);
     }
+    
+    // 增加明确的检查以防止 crash
+    if (!root || !root.id) {
+        throw new Error("Critical Error: Unable to locate or create user's root folder. Please check database setup.");
+    }
+    
     return c.redirect(`/view/${encrypt(root.id)}`);
 });
 app.get('/fix-root', async (c) => c.redirect('/'));
