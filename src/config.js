@@ -11,7 +11,7 @@ export default class ConfigManager {
             const data = await this.kv.get('config', { type: 'json' });
             // 提供默认值，防止 null 导致报错
             this.cache = data || {
-                storageMode: 'local', // 默认为本地或 R2
+                storageMode: '', // 移除默认 'local'，留空迫使用户配置
                 s3: {},
                 webdav: {},
                 telegram: {}
