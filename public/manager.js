@@ -1,4 +1,4 @@
-// public/manager.js - 完整修复版
+// public/manager.js - 完整全功能版 (修复根目录显示名称)
 
 // =================================================================================
 // 1. 全局工具函数 (无依赖，放在最外层)
@@ -41,6 +41,11 @@ function formatSize(bytes) {
     const sizes = ['B', 'KB', 'MB', 'GB', 'TB']; 
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]; 
+}
+
+// 新增：获取显示名称，将 "/" 转换为 "根目录"
+function getDisplayName(name) {
+    return (name === '/' || name === 'root') ? '根目录' : name;
 }
 
 // =================================================================================
@@ -419,12 +424,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function updateFolderSelectForUpload(folders) {
         if(!folderSelect) return;
+        // 修改：使用 getDisplayName 显示根目录
+        const rootName = getDisplayName('/'); 
         folderSelect.innerHTML = `<option value="${currentFolderId}">当前文件夹</option>`;
         items.forEach(item => {
             if(item.type === 'folder') {
                 const op = document.createElement('option');
                 op.value = item.encrypted_id;
-                op.textContent = item.name;
+                op.textContent = getDisplayName(item.name);
                 folderSelect.appendChild(op);
             }
         });
@@ -434,17 +441,22 @@ document.addEventListener('DOMContentLoaded', () => {
         if(isTrashMode) return; 
         if(!breadcrumb) return;
         breadcrumb.innerHTML = '';
+        
+        // 修改：根节点文字改为 "根目录"
         const rootLi = document.createElement('a');
         rootLi.href = '#';
-        rootLi.innerHTML = '<i class="fas fa-home"></i> 首页';
+        rootLi.innerHTML = '<i class="fas fa-home"></i> 根目录';
+        
         rootLi.onclick = (e) => { e.preventDefault(); if(currentPath.length > 0) loadFolder(currentPath[0].encrypted_id); };
         breadcrumb.appendChild(rootLi);
+        
         currentPath.forEach((folder, index) => {
             const sep = document.createElement('span');
             sep.className = 'separator'; sep.textContent = '/';
             breadcrumb.appendChild(sep);
             const a = document.createElement('a');
-            a.textContent = folder.name;
+            a.textContent = getDisplayName(folder.name); // 使用格式化后的名称
+            
             if (index === currentPath.length - 1) { a.classList.add('active'); } 
             else { a.href = '#'; a.onclick = (e) => { e.preventDefault(); loadFolder(folder.encrypted_id); }; }
             breadcrumb.appendChild(a);
@@ -894,12 +906,14 @@ document.addEventListener('DOMContentLoaded', () => {
         const itemDiv = document.createElement('div');
         itemDiv.className = 'folder-item';
         const isSelf = movingIds.has(folder.id);
+        const displayName = getDisplayName(folder.name); // 使用 getDisplayName
+
         if (isSelf) {
             itemDiv.style.color = '#999';
             itemDiv.style.cursor = 'not-allowed';
-            itemDiv.innerHTML = `<i class="fas fa-folder" style="margin-right:5px;"></i> ${escapeHtml(folder.name)} (当前)`;
+            itemDiv.innerHTML = `<i class="fas fa-folder" style="margin-right:5px;"></i> ${escapeHtml(displayName)} (当前)`;
         } else {
-            itemDiv.innerHTML = `<i class="fas fa-folder" style="margin-right:5px;"></i> ${escapeHtml(folder.name)}`;
+            itemDiv.innerHTML = `<i class="fas fa-folder" style="margin-right:5px;"></i> ${escapeHtml(displayName)}`;
             itemDiv.onclick = () => {
                 document.querySelectorAll('.folder-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
@@ -1224,16 +1238,14 @@ document.addEventListener('DOMContentLoaded', () => {
             e.preventDefault();
             let allItems = [];
             
-            // 处理普通文件上传
             if (fileInput.files.length > 0) {
                 allItems = allItems.concat(Array.from(fileInput.files).map(f => ({ file: f, path: '' })));
             }
             
-            // 处理文件夹上传 (修复后)
             if (folderInput.files.length > 0) {
                 allItems = allItems.concat(Array.from(folderInput.files).map(f => {
                     const parts = f.webkitRelativePath.split('/');
-                    parts.pop(); // 移除文件名
+                    parts.pop(); 
                     return { 
                         file: f, 
                         path: parts.join('/') 
