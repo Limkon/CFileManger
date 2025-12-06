@@ -1026,43 +1026,60 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (pathCache[relPath]) targetFolderId = pathCache[relPath];
                 else { targetFolderId = await ensureRemotePath(relPath, rootId); pathCache[relPath] = targetFolderId; }
 
-                const contents = await getFolderContentsForUpload(targetFolderId);
-                const existingFile = contents.files.find(f => f.fileName === file.name);
+                // 新逻辑：先验重
                 let conflictMode = 'rename'; 
+                let shouldUpload = true;
 
-                if (existingFile) {
-                    if (conflictResolutionState.applyToAll && conflictResolutionState.choice) {
-                        conflictMode = conflictResolutionState.choice;
-                    } else {
-                        const result = await showConflictModal(file.name);
-                        conflictMode = result.choice;
-                        if (result.applyToAll) {
-                            conflictResolutionState.applyToAll = true;
-                            conflictResolutionState.choice = conflictMode;
+                try {
+                    // 发起后端检查
+                    const checkRes = await axios.post('/api/file/check', {
+                        folderId: targetFolderId, // 传递加密的 ID
+                        fileName: file.name
+                    });
+                    
+                    if (checkRes.data.exists) {
+                         // 如果存在，处理冲突逻辑
+                         if (conflictResolutionState.applyToAll && conflictResolutionState.choice) {
+                            conflictMode = conflictResolutionState.choice;
+                        } else {
+                            const result = await showConflictModal(file.name);
+                            conflictMode = result.choice;
+                            if (result.applyToAll) {
+                                conflictResolutionState.applyToAll = true;
+                                conflictResolutionState.choice = conflictMode;
+                            }
                         }
+                        
+                        if (conflictMode === 'cancel') { failCount += (queue.length - i); break; }
+                        if (conflictMode === 'skip') shouldUpload = false;
                     }
-                    if (conflictMode === 'cancel') { failCount += (queue.length - i); break; }
-                    if (conflictMode === 'skip') continue; 
+                } catch (checkErr) {
+                    console.warn('验重请求失败，将尝试直接重命名上传:', checkErr);
+                    // 如果验重接口挂了，默认继续上传（后端默认是 rename）
                 }
 
-                const formData = new FormData();
-                formData.append('files', file, file.name);
+                if (shouldUpload) {
+                    const formData = new FormData();
+                    formData.append('files', file, file.name);
 
-                let currentFileLoaded = 0;
-                await axios.post(`/upload?folderId=${targetFolderId || ''}&conflictMode=${conflictMode}`, formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                    onUploadProgress: (p) => {
-                        const diff = p.loaded - currentFileLoaded;
-                        currentFileLoaded = p.loaded;
-                        loadedBytesGlobal += diff;
-                        if (totalBytes > 0 && progressBar) {
-                            const percent = Math.min(100, Math.round((loadedBytesGlobal * 100) / totalBytes));
-                            // 仅更新悬浮窗进度
-                            TaskManager.update(percent, statusMsg); 
+                    let currentFileLoaded = 0;
+                    await axios.post(`/upload?folderId=${targetFolderId || ''}&conflictMode=${conflictMode}`, formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        onUploadProgress: (p) => {
+                            const diff = p.loaded - currentFileLoaded;
+                            currentFileLoaded = p.loaded;
+                            loadedBytesGlobal += diff;
+                            if (totalBytes > 0 && progressBar) {
+                                const percent = Math.min(100, Math.round((loadedBytesGlobal * 100) / totalBytes));
+                                // 仅更新悬浮窗进度
+                                TaskManager.update(percent, statusMsg); 
+                            }
                         }
-                    }
-                });
-                successCount++;
+                    });
+                    successCount++;
+                } else {
+                    // 跳过也视为已处理
+                }
             } catch (error) { failCount++; }
         }
 
