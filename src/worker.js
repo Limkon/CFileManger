@@ -29,10 +29,11 @@ app.get('/login', serveStatic({ path: 'login.html', manifest }));
 app.get('/register', serveStatic({ path: 'register.html', manifest }));
 app.get('/admin', serveStatic({ path: 'admin.html', manifest }));
 app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
+app.get('/shares', serveStatic({ path: 'shares.html', manifest })); // 确保分享管理页面可访问
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
-// 分享页面模板 (压缩过的 HTML 字符串)
-const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加載...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加載失敗');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>錯誤</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密碼保護</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="請輸入密碼" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解鎖</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>時間: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下載文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夾)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
+// 分享页面模板 (修复了文件夹视图中文件无法下载的问题)
+const SHARE_HTML = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>分享的文件</title><link rel="stylesheet" href="/manager.css"><link rel="stylesheet" href="/vendor/fontawesome/css/all.min.css"><style>.container{max-width:800px;margin:50px auto;padding:20px;background:#fff;border-radius:8px;box-shadow:0 2px 10px rgba(0,0,0,0.1)}.locked-screen{text-align:center}.file-icon{font-size:64px;color:#007bff;margin-bottom:20px}.btn{display:inline-block;padding:10px 20px;background:#007bff;color:#fff;text-decoration:none;border-radius:5px;cursor:pointer;border:none}.list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}.list-item a{text-decoration:none;color:inherit;display:flex;align-items:center;width:100%}.list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}</style></head><body><div class="container" id="app"><h2 style="text-align:center;">正在加载...</h2></div><script>const pathParts=window.location.pathname.split('/');const token=pathParts.pop();const itemType=pathParts[pathParts.length-1];const app=document.getElementById('app');async function load(){try{const res=await fetch('/api/public/share/'+token);const data=await res.json();if(!res.ok)throw new Error(data.message||'加载失败');if(data.isLocked&&!data.isUnlocked){renderPasswordForm(data.name)}else if(data.type==='file'){renderFile(data)}else{renderFolder(data)}}catch(e){app.innerHTML='<div style="text-align:center;color:red;"><h3>错误</h3><p>'+e.message+'</p></div>'}}function renderPasswordForm(name){app.innerHTML=\`<div class="locked-screen"><i class="fas fa-lock file-icon"></i><h3>\${name} 受密码保护</h3><div style="margin:20px 0;"><input type="password" id="pass" placeholder="请输入密码" style="padding:10px; width:200px;"><button class="btn" onclick="submitPass()">解锁</button></div><p id="err" class="error-msg"></p></div>\`}window.submitPass=async()=>{const pass=document.getElementById('pass').value;const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});const d=await res.json();if(d.success)load();else document.getElementById('err').textContent=d.message};function renderFile(data){app.innerHTML=\`<div style="text-align:center;"><i class="fas fa-file file-icon"></i><h2>\${data.name}</h2><p>大小: \${(data.size/1024/1024).toFixed(2)} MB</p><p>时间: \${new Date(data.date).toLocaleString()}</p><div style="margin-top:30px;"><a href="\${data.downloadUrl}" class="btn"><i class="fas fa-download"></i> 下载文件</a></div></div>\`}function renderFolder(data){let html=\`<h3>\${data.name} (文件夹)</h3><div class="list">\`;if(data.folders)data.folders.forEach(f=>{html+=\`<div class="list-item"><i class="fas fa-folder" style="color:#fbc02d;"></i> <span>\${f.name}</span></div>\`});if(data.files)data.files.forEach(f=>{html+=\`<div class="list-item"><a href="/share/download/\${token}/\${f.id}" target="_blank"><i class="fas fa-file" style="color:#555;"></i> <span>\${f.name || f.fileName}</span> <span style="margin-left:auto;font-size:12px;color:#999;">\${(f.size/1024).toFixed(1)} KB</span></a></div>\`});html+='</div>';app.innerHTML=html}load()</script></body></html>`;
 app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
 
 // =================================================================================
@@ -56,7 +57,6 @@ app.use('*', async (c, next) => {
             c.set('storage', storage);
         } catch (storageErr) {
             console.warn("⚠️ 存储初始化警告:", storageErr.message);
-            // 注入伪存储对象，防止应用崩溃，允许进入 Admin 页面进行配置
             c.set('storage', { 
                 list: async () => [], 
                 upload: async () => { throw new Error(`存储配置错误: ${storageErr.message}`); },
@@ -103,7 +103,146 @@ const adminMiddleware = async (c, next) => {
 };
 
 // =================================================================================
-// 5. 核心业务路由 (Setup, Login, Register)
+// 5. 分享相关 API (新增/修复部分)
+// =================================================================================
+
+// 获取分享信息 (公开)
+app.get('/api/public/share/:token', async (c) => {
+    const token = c.req.param('token');
+    const db = c.get('db');
+
+    // 1. 尝试查找文件
+    let item = await data.getFileByShareToken(db, token);
+    let type = 'file';
+
+    // 2. 如果不是文件，尝试查找文件夹
+    if (!item) {
+        item = await data.getFolderByShareToken(db, token);
+        type = 'folder';
+    }
+
+    if (!item) return c.json({ success: false, message: '分享不存在或已过期' }, 404);
+
+    // 3. 检查密码
+    let isLocked = !!item.share_password;
+    let isUnlocked = false;
+    if (isLocked) {
+        const authCookie = getCookie(c, `share_auth_${token}`);
+        if (authCookie === 'valid') {
+            isUnlocked = true;
+        }
+    }
+
+    if (isLocked && !isUnlocked) {
+        return c.json({ 
+            isLocked: true, 
+            isUnlocked: false, 
+            name: item.fileName || item.name, // 仅返回名称，不返回内容
+            type 
+        });
+    }
+
+    // 4. 返回内容
+    if (type === 'file') {
+        return c.json({
+            type: 'file',
+            name: item.fileName,
+            size: item.size,
+            date: item.date,
+            downloadUrl: `/share/download/${token}`
+        });
+    } else {
+        // 获取文件夹内容
+        const contents = await data.getFolderContents(db, item.id, item.user_id);
+        return c.json({
+            type: 'folder',
+            name: item.name,
+            files: contents.files,
+            folders: contents.folders,
+            isLocked: isLocked,
+            isUnlocked: true
+        });
+    }
+});
+
+// 验证分享密码 (公开)
+app.post('/api/public/share/:token/auth', async (c) => {
+    const token = c.req.param('token');
+    const { password } = await c.req.json();
+    const db = c.get('db');
+    const bcrypt = await import('bcryptjs');
+
+    let item = await data.getFileByShareToken(db, token);
+    if (!item) item = await data.getFolderByShareToken(db, token);
+    if (!item) return c.json({ success: false, message: '分享不存在' }, 404);
+
+    if (item.share_password && bcrypt.compareSync(password, item.share_password)) {
+        // 设置验证 Cookie
+        setCookie(c, `share_auth_${token}`, 'valid', { path: '/', httpOnly: true, maxAge: 3600 });
+        return c.json({ success: true });
+    }
+    return c.json({ success: false, message: '密码错误' });
+});
+
+// 下载分享的文件 (单文件分享)
+app.get('/share/download/:token', async (c) => {
+    const token = c.req.param('token');
+    const db = c.get('db');
+    
+    const item = await data.getFileByShareToken(db, token);
+    if (!item) return c.text('File not found or expired', 404);
+
+    // 检查密码
+    if (item.share_password) {
+        const authCookie = getCookie(c, `share_auth_${token}`);
+        if (authCookie !== 'valid') return c.text('Unauthorized', 401);
+    }
+
+    const storage = c.get('storage');
+    try {
+        const { stream, contentType, headers } = await storage.download(item.file_id, item.user_id);
+        const h = new Headers(headers);
+        h.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(item.fileName)}`);
+        h.set('Content-Type', item.mimetype || contentType || 'application/octet-stream');
+        return new Response(stream, { headers: h });
+    } catch(e) { return c.text(e.message, 500); }
+});
+
+// 下载分享文件夹中的文件
+app.get('/share/download/:token/:fileId', async (c) => {
+    const token = c.req.param('token');
+    const fileId = c.req.param('fileId');
+    const db = c.get('db');
+
+    const folder = await data.getFolderByShareToken(db, token);
+    if (!folder) return c.text('Shared folder not found', 404);
+
+    if (folder.share_password) {
+        const authCookie = getCookie(c, `share_auth_${token}`);
+        if (authCookie !== 'valid') return c.text('Unauthorized', 401);
+    }
+
+    // 查找文件并验证归属
+    const files = await data.getFilesByIds(db, [fileId], folder.user_id);
+    if (!files.length) return c.text('File not found', 404);
+    const file = files[0];
+    
+    if (file.folder_id !== folder.id) {
+        return c.text('File does not belong to this shared folder', 403);
+    }
+
+    const storage = c.get('storage');
+    try {
+        const { stream, contentType, headers } = await storage.download(file.file_id, file.user_id);
+        const h = new Headers(headers);
+        h.set('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.fileName)}`);
+        h.set('Content-Type', file.mimetype || contentType || 'application/octet-stream');
+        return new Response(stream, { headers: h });
+    } catch(e) { return c.text(e.message, 500); }
+});
+
+// =================================================================================
+// 6. 核心业务路由
 // =================================================================================
 
 app.get('/setup', async (c) => {
@@ -159,7 +298,6 @@ app.get('/', async (c) => {
     const db = c.get('db'); const user = c.get('user');
     let root = await data.getRootFolder(db, user.id);
     if (!root) {
-        // 如果根目录不存在，尝试修复
         await db.run("DELETE FROM folders WHERE user_id = ? AND parent_id IS NULL", [user.id]);
         await data.createFolder(db, '/', null, user.id);
         root = await data.getRootFolder(db, user.id);
@@ -169,7 +307,7 @@ app.get('/', async (c) => {
 app.get('/fix-root', async (c) => c.redirect('/'));
 
 // =================================================================================
-// 6. 文件操作 API (已优化 ID 为字符串处理)
+// 7. 文件/文件夹管理 API
 // =================================================================================
 
 app.get('/api/folder/:encryptedId', async (c) => {
@@ -184,42 +322,31 @@ app.get('/api/folder/:encryptedId', async (c) => {
 
 app.get('/api/folders', async (c) => c.json(await data.getAllFolders(c.get('db'), c.get('user').id)));
 
-// === 新增: 文件存在检查 API (修正 BUG 邏輯) ===
 app.post('/api/file/check', async (c) => {
     try {
         const { folderId, fileName } = await c.req.json();
-        // 解析 folderId (前端傳來的通常是加密ID)
         const fid = parseInt(decrypt(folderId));
         if (isNaN(fid)) return c.json({ exists: false });
         
         const db = c.get('db');
         const userId = c.get('user').id;
-        
-        // 核心修正：使用 deleted_at IS NULL 檢查文件是否處於未刪除狀態
         const existingActiveFile = await db.get(
             "SELECT 1 FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND deleted_at IS NULL", 
             [fid, fileName, userId]
         );
-        
         return c.json({ exists: !!existingActiveFile });
     } catch (e) {
-        console.error("Check file exist error:", e);
         return c.json({ exists: false, error: e.message });
     }
 });
 
 app.post('/upload', async (c) => {
-    console.log("🚀 [Upload] 收到上传请求");
-    const db = c.get('db'); 
-    const storage = c.get('storage'); 
-    const user = c.get('user');
-    const config = c.get('config');
-
+    const db = c.get('db'); const storage = c.get('storage'); 
+    const user = c.get('user'); const config = c.get('config');
     try {
         const body = await c.req.parseBody();
         const folderId = parseInt(decrypt(c.req.query('folderId')));
-        const conflictMode = c.req.query('conflictMode') || 'rename'; // 仍然保留 conflictMode 处理，作为最终保障
-
+        const conflictMode = c.req.query('conflictMode') || 'rename';
         if (isNaN(folderId)) throw new Error('Invalid Folder ID');
 
         const files = [];
@@ -236,33 +363,22 @@ app.post('/upload', async (c) => {
 
         const results = [];
         for(const file of files) {
-            console.log(`👉 处理文件: ${file.name}`);
             try {
                 let finalName = file.name;
                 let existing = null;
-                
-                // 如果是 overwrite 模式，需要先查出旧文件记录
-                // 修正: 使用 deleted_at IS NULL 确保只检查活动文件
                 if(conflictMode === 'overwrite') {
                     existing = await db.get("SELECT * FROM files WHERE fileName=? AND folder_id=? AND user_id=? AND deleted_at IS NULL", [file.name, folderId, user.id]);
                 } else {
-                    // rename 模式 (或默认)，获取唯一文件名
                     finalName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
                 }
-
-                console.log(`   [Storage] 上传至: ${finalName}`);
                 const up = await storage.upload(file, finalName, file.type, user.id, folderId, config);
                 
                 if(existing) {
-                    console.log(`   [DB] 更新记录 ID: ${existing.message_id}`);
-                    // 更新现有记录
                     await data.updateFile(db, existing.message_id, {
                         file_id: up.fileId, size: file.size, date: Date.now(), mimetype: file.type, thumb_file_id: up.thumbId || null
                     }, user.id);
                 } else {
-                    // 插入新记录
                     const mid = (BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random()*1000))).toString();
-                    console.log(`   [DB] 插入新记录 ID: ${mid}`);
                     await data.addFile(db, {
                         message_id: mid, fileName: finalName, mimetype: file.type, size: file.size,
                         file_id: up.fileId, thumb_file_id: up.thumbId || null, date: Date.now()
@@ -270,20 +386,15 @@ app.post('/upload', async (c) => {
                 }
                 results.push({name: finalName, success: true});
             } catch(e) {
-                console.error("❌ 单个文件处理失败:", e);
                 results.push({name: file.name, success: false, error: e.message});
             }
         }
         return c.json({success:true, results});
-    } catch(e) {
-        console.error("❌ 上传接口致命错误:", e);
-        return c.json({success:false, message:e.message}, 500);
-    }
+    } catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
 
 app.get('/download/proxy/:messageId', async (c) => {
     const user = c.get('user');
-    // 修正：ID 保持 String
     const files = await data.getFilesByIds(c.get('db'), [c.req.param('messageId')], user.id);
     if (!files.length) return c.text('File Not Found', 404);
     try {
@@ -300,7 +411,6 @@ app.post('/api/move', async (c) => {
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
     try {
-        // 修正：ID 保持 String 数组
         await data.moveItems(c.get('db'), c.get('storage'), (files||[]), (folders||[]).map(parseInt), tid, c.get('user').id, conflictMode);
         return c.json({success:true});
     } catch(e) { return c.json({success:false, message:e.message}, 500); }
@@ -316,7 +426,6 @@ app.post('/api/folder/create', async (c) => {
 
 app.post('/api/delete', async (c) => {
     const { files, folders, permanent } = await c.req.json();
-    // 修正：确保文件 ID 转为 String
     const fIds = (files||[]).map(String); 
     const dIds = (folders||[]).map(parseInt);
     if(permanent) await data.unifiedDelete(c.get('db'), c.get('storage'), null, null, c.get('user').id, fIds, dIds);
@@ -328,7 +437,6 @@ app.get('/api/trash', async (c) => c.json(await data.getTrashContents(c.get('db'
 
 app.post('/api/trash/restore', async (c) => {
     const { files, folders } = await c.req.json();
-    // 修正：确保文件 ID 转为 String
     await data.restoreItems(c.get('db'), (files||[]).map(String), (folders||[]).map(parseInt), c.get('user').id);
     return c.json({ success: true });
 });
@@ -337,7 +445,6 @@ app.post('/api/trash/empty', async (c) => c.json(await data.emptyTrash(c.get('db
 
 app.post('/api/rename', async (c) => {
     const { type, id, name } = await c.req.json();
-    // 修正：文件 ID 使用 String
     if(type==='file') await data.renameFile(c.get('db'), c.get('storage'), String(id), name, c.get('user').id);
     else await data.renameFolder(c.get('db'), c.get('storage'), parseInt(id), name, c.get('user').id);
     return c.json({success:true});
@@ -367,32 +474,20 @@ app.post('/api/folder/lock', async (c) => {
 });
 
 // =================================================================================
-// 7. 管理员 API
+// 8. 管理员 API
 // =================================================================================
 
 app.get('/api/admin/users', adminMiddleware, async (c) => {
-    try { 
-        const users = await data.listAllUsers(c.get('db')); 
-        return c.json(users);
-    } catch(e) { 
-        return c.json({success:false, message:e.message}, 500); 
-    }
+    try { const users = await data.listAllUsers(c.get('db')); return c.json(users); } 
+    catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
 
 app.get('/api/admin/users-with-quota', adminMiddleware, async (c) => {
-    try {
-        const users = await data.listAllUsersWithQuota(c.get('db'));
-        return c.json({users});
-    } catch(e) {
-        return c.json({success:false, message:e.message}, 500);
-    }
+    try { const users = await data.listAllUsersWithQuota(c.get('db')); return c.json({users}); } 
+    catch(e) { return c.json({success:false, message:e.message}, 500); }
 });
 
-// 获取当前存储模式
-app.get('/api/admin/storage-mode', adminMiddleware, async (c) => {
-    const config = c.get('config');
-    return c.json({ mode: config.storageMode });
-});
+app.get('/api/admin/storage-mode', adminMiddleware, async (c) => c.json({ mode: c.get('config').storageMode }));
 
 app.post('/api/admin/storage-mode', adminMiddleware, async (c) => {
     const body = await c.req.json();
@@ -407,9 +502,7 @@ app.get('/api/admin/webdav', adminMiddleware, async(c) => {
 
 app.post('/api/admin/webdav', adminMiddleware, async(c) => { 
     let webdavConfig = await c.req.json();
-    if (Array.isArray(webdavConfig)) {
-        webdavConfig = webdavConfig[0] || {};
-    }
+    if (Array.isArray(webdavConfig)) webdavConfig = webdavConfig[0] || {};
     await c.get('configManager').save({webdav: webdavConfig}); 
     return c.json({success:true}); 
 });
@@ -462,7 +555,7 @@ app.post('/api/admin/set-quota', adminMiddleware, async (c) => {
 });
 
 // =================================================================================
-// 8. 静态资源兜底
+// 9. 静态资源兜底
 // =================================================================================
 app.use('/*', serveStatic({ root: './', manifest }));
 
