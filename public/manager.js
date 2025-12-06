@@ -307,27 +307,29 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function createListItem(item) {
-        const div = document.createElement('div');
-        div.className = 'list-row list-item';
-        if(isTrashMode) div.classList.add('deleted');
-        div.dataset.id = getItemId(item);
+        // 修正：使用 tr 元素代替 div，适配 HTML 的 table 结构
+        const tr = document.createElement('tr');
+        tr.className = 'list-row list-item';
+        if(isTrashMode) tr.classList.add('deleted');
+        tr.dataset.id = getItemId(item);
         
-        div.onclick = (e) => handleItemClick(e, item, div);
-        div.oncontextmenu = (e) => handleContextMenu(e, item);
-        div.ondblclick = () => handleItemDblClick(item);
+        tr.onclick = (e) => handleItemClick(e, item, tr);
+        tr.oncontextmenu = (e) => handleContextMenu(e, item);
+        tr.ondblclick = () => handleItemDblClick(item);
 
         const iconClass = getIconClass(item);
         const dateStr = item.date ? new Date(item.date).toLocaleString() : (item.deleted_at ? new Date(item.deleted_at).toLocaleString() : '-');
         const sizeStr = item.size !== undefined ? formatSize(item.size) : '-';
 
-        div.innerHTML = `
-            <div class="list-icon"><i class="${iconClass}" style="color: ${item.type === 'folder' ? '#fbc02d' : '#555'}"></i></div>
-            <div class="list-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div>
-            <div class="list-size">${sizeStr}</div>
-            <div class="list-date">${dateStr}</div>
+        // 修正：使用 td 单元格包裹内容
+        tr.innerHTML = `
+            <td><div class="list-icon"><i class="${iconClass}" style="color: ${item.type === 'folder' ? '#fbc02d' : '#555'}"></i></div></td>
+            <td><div class="list-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</div></td>
+            <td>${sizeStr}</td>
+            <td>${dateStr}</td>
         `;
-        if (selectedItems.has(getItemId(item))) div.classList.add('selected');
-        return div;
+        if (selectedItems.has(getItemId(item))) tr.classList.add('selected');
+        return tr;
     }
 
     function renderItems(itemsToRender) {
@@ -1165,3 +1167,4 @@ document.addEventListener('DOMContentLoaded', () => {
     loadFolder(currentFolderId);
     updateQuota();
 });
+
