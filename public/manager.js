@@ -346,7 +346,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 4. 其他逻辑函数
 
-    // [新增] 更新配额函数
     async function updateQuota() {
         try {
             const res = await axios.get('/api/user/quota');
@@ -358,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const percent = Math.min(100, (used / max) * 100);
                     quotaBar.style.width = percent + '%';
                 } else {
-                    quotaBar.style.width = '0%'; // 无限容量时
+                    quotaBar.style.width = '0%'; 
                 }
             }
         } catch (e) {
@@ -996,10 +995,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (queue.length === 0) return;
 
         if(uploadModal) {
-            uploadModal.style.display = 'block';
-            if(document.getElementById('uploadForm')) document.getElementById('uploadForm').style.display = 'none';
+            // 关闭上传窗口，使用右下角任务栏显示进度
+            uploadModal.style.display = 'none';
         }
-        if(progressArea) progressArea.style.display = 'block';
+        
+        if(document.getElementById('uploadForm')) document.getElementById('uploadForm').style.display = 'block';
+        if(progressArea) progressArea.style.display = 'none';
+        
         TaskManager.show('准备上传...', 'fas fa-cloud-upload-alt');
 
         conflictResolutionState.applyToAll = false;
@@ -1055,8 +1057,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         loadedBytesGlobal += diff;
                         if (totalBytes > 0 && progressBar) {
                             const percent = Math.min(100, Math.round((loadedBytesGlobal * 100) / totalBytes));
-                            progressBar.style.width = percent + '%';
-                            progressBar.textContent = percent + '%';
+                            // 仅更新悬浮窗进度
                             TaskManager.update(percent, statusMsg); 
                         }
                     }
@@ -1070,10 +1071,7 @@ document.addEventListener('DOMContentLoaded', () => {
         TaskManager.success('所有文件上传完成');
 
         setTimeout(() => {
-            if(uploadModal) uploadModal.style.display = 'none';
-            if(document.getElementById('uploadForm')) document.getElementById('uploadForm').style.display = 'block';
             if(uploadForm) uploadForm.reset();
-            if(progressArea) progressArea.style.display = 'none';
             if(uploadStatusText) uploadStatusText.textContent = '';
             loadFolder(currentFolderId);
             updateQuota();
