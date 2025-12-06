@@ -184,6 +184,30 @@ app.get('/api/folder/:encryptedId', async (c) => {
 
 app.get('/api/folders', async (c) => c.json(await data.getAllFolders(c.get('db'), c.get('user').id)));
 
+// === 新增: 文件存在检查 API ===
+app.post('/api/file/check', async (c) => {
+    try {
+        const { folderId, fileName } = await c.req.json();
+        // 解析 folderId (前端传来的通常是加密ID)
+        const fid = parseInt(decrypt(folderId));
+        if (isNaN(fid)) return c.json({ exists: false });
+        
+        const db = c.get('db');
+        const userId = c.get('user').id;
+        
+        // 查询数据库中是否存在同名文件 (未删除的)
+        const existing = await db.get(
+            "SELECT 1 FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND (is_deleted = 0 OR is_deleted IS NULL)", 
+            [fid, fileName, userId]
+        );
+        
+        return c.json({ exists: !!existing });
+    } catch (e) {
+        console.error("Check file exist error:", e);
+        return c.json({ exists: false, error: e.message });
+    }
+});
+
 app.post('/upload', async (c) => {
     console.log("🚀 [Upload] 收到上传请求");
     const db = c.get('db'); 
@@ -194,7 +218,7 @@ app.post('/upload', async (c) => {
     try {
         const body = await c.req.parseBody();
         const folderId = parseInt(decrypt(c.req.query('folderId')));
-        const conflictMode = c.req.query('conflictMode') || 'rename';
+        const conflictMode = c.req.query('conflictMode') || 'rename'; // 仍然保留 conflictMode 处理，作为最终保障
 
         if (isNaN(folderId)) throw new Error('Invalid Folder ID');
 
@@ -217,10 +241,11 @@ app.post('/upload', async (c) => {
                 let finalName = file.name;
                 let existing = null;
                 
+                // 如果是 overwrite 模式，需要先查出旧文件记录
                 if(conflictMode === 'overwrite') {
-                    // 查询是否存在且未删除的文件
                     existing = await db.get("SELECT * FROM files WHERE fileName=? AND folder_id=? AND user_id=? AND (is_deleted=0 OR is_deleted IS NULL)", [file.name, folderId, user.id]);
                 } else {
+                    // rename 模式 (或默认)，获取唯一文件名
                     finalName = await data.getUniqueName(db, folderId, file.name, user.id, 'file');
                 }
 
@@ -229,12 +254,12 @@ app.post('/upload', async (c) => {
                 
                 if(existing) {
                     console.log(`   [DB] 更新记录 ID: ${existing.message_id}`);
-                    // 修正：直接传入 string 类型的 message_id
+                    // 更新现有记录
                     await data.updateFile(db, existing.message_id, {
                         file_id: up.fileId, size: file.size, date: Date.now(), mimetype: file.type, thumb_file_id: up.thumbId || null
                     }, user.id);
                 } else {
-                    // 生成 string 类型的 ID
+                    // 插入新记录
                     const mid = (BigInt(Date.now()) * 1000n + BigInt(Math.floor(Math.random()*1000))).toString();
                     console.log(`   [DB] 插入新记录 ID: ${mid}`);
                     await data.addFile(db, {
