@@ -32,7 +32,8 @@ app.get('/editor', serveStatic({ path: 'editor.html', manifest }));
 app.get('/shares', serveStatic({ path: 'shares.html', manifest })); 
 app.get('/view/*', serveStatic({ path: 'manager.html', manifest }));
 
-// 分享页面模板 (已更新：支持图片/视频预览及文本直接展示)
+// 分享页面模板
+// 修改点：submitPass 成功后改为 reload()，以便文本文件能重新请求并被后端识别直接返回原始内容
 const SHARE_HTML = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -45,7 +46,6 @@ const SHARE_HTML = `<!DOCTYPE html>
 .list-item{display:flex;align-items:center;padding:10px;border-bottom:1px solid #eee}
 .list-item a{text-decoration:none;color:inherit;display:flex;align-items:center;width:100%}
 .list-item i{margin-right:10px;width:20px;text-align:center}.error-msg{color:red;margin-top:10px}
-pre{white-space:pre-wrap;word-wrap:break-word;background:#f8f9fa;padding:15px;border-radius:4px;border:1px solid #eee;max-height:60vh;overflow:auto;text-align:left;font-family:Consolas,monaco,monospace;font-size:13px;}
 </style>
 </head>
 <body>
@@ -76,31 +76,22 @@ window.submitPass=async()=>{
     const pass=document.getElementById('pass').value;
     const res=await fetch('/api/public/share/'+token+'/auth',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pass})});
     const d=await res.json();
-    if(d.success)load();else document.getElementById('err').textContent=d.message
+    // 关键修改：解锁成功后刷新页面，让后端重新判断是否直接返回文本流
+    if(d.success) window.location.reload(); 
+    else document.getElementById('err').textContent=d.message
 };
 
 function renderFile(data){
     const ext = (data.name||'').split('.').pop().toLowerCase();
     const isImg = ['jpg','jpeg','png','gif','webp','svg','bmp'].includes(ext);
     const isVideo = ['mp4','webm','mov','avi','mkv'].includes(ext);
-    const isText = ['txt','md','js','json','css','html','xml','log','ini','conf','sh','yaml'].includes(ext);
     
     let preview = '';
     if(isImg) preview = \`<div style="margin:20px 0;"><img src="\${data.downloadUrl}" style="max-width:100%;max-height:80vh;border-radius:4px;"></div>\`;
     else if(isVideo) preview = \`<div style="margin:20px 0;"><video src="\${data.downloadUrl}" controls style="max-width:100%;max-height:80vh;border-radius:4px;"></video></div>\`;
-    else if(isText) {
-        preview = \`<div id="txt-pv" style="margin-top:20px;">正在加载文本内容...</div>\`;
-        // 异步加载文本
-        fetch(data.downloadUrl).then(r=>r.text()).then(t=>{
-            const el=document.getElementById('txt-pv');
-            if(el){el.innerHTML='<pre>'+escapeHtml(t.slice(0,100000))+(t.length>100000?'\\n... (内容过长截断)':'')+'</pre>'}
-        }).catch(e=>{
-            const el=document.getElementById('txt-pv');if(el)el.innerHTML='<span style="color:red">文本预览加载失败</span>'
-        });
-    }
-
+    
     app.innerHTML=\`<div style="text-align:center;">
-        <div class="file-icon"><i class="fas fa-\${isImg?'image':(isVideo?'video':(isText?'file-alt':'file'))}"></i></div>
+        <div class="file-icon"><i class="fas fa-\${isImg?'image':(isVideo?'video':'file')}"></i></div>
         <h2>\${escapeHtml(data.name)}</h2>
         <p style="color:#666;">大小: \${formatSize(data.size)} <span style="margin:0 10px;">|</span> 时间: \${new Date(data.date).toLocaleString()}</p>
         \${preview}
@@ -117,7 +108,46 @@ function renderFolder(data){
 load();
 </script></body></html>`;
 
-app.get('/share/view/:type/:token', (c) => c.html(SHARE_HTML));
+// 分享视图路由
+app.get('/share/view/:type/:token', async (c) => {
+    const token = c.req.param('token');
+    const type = c.req.param('type');
+
+    // 修改点：如果是文件类型，先检查是否为文本文件且有权限查看
+    if (type === 'file') {
+        const db = c.get('db');
+        const item = await data.getFileByShareToken(db, token);
+        
+        if (item) {
+            // 检查是否有密码锁
+            let isLocked = !!item.share_password;
+            if (isLocked) {
+                const authCookie = getCookie(c, `share_auth_${token}`);
+                if (authCookie === 'valid') isLocked = false;
+            }
+
+            // 如果未锁定，且是文本文件 -> 直接返回纯文本内容 (无网页元素)
+            if (!isLocked && item.mimetype && item.mimetype.startsWith('text/')) {
+                const storage = c.get('storage');
+                try {
+                    const { stream } = await storage.download(item.file_id, item.user_id);
+                    return new Response(stream, {
+                        headers: {
+                            'Content-Type': 'text/plain; charset=utf-8',
+                            'Content-Disposition': 'inline'
+                        }
+                    });
+                } catch (e) {
+                    // 如果获取失败，回退到 HTML 页面显示错误
+                    return c.html(SHARE_HTML);
+                }
+            }
+        }
+    }
+
+    // 其他情况（图片、视频、文件夹、未解锁文件）返回标准 HTML 页面
+    return c.html(SHARE_HTML);
+});
 
 // =================================================================================
 // 3. 环境初始化中间件
@@ -186,7 +216,7 @@ const adminMiddleware = async (c, next) => {
 };
 
 // =================================================================================
-// 5. 分享相关 API
+// 5. 分享相关 API (新增/修复部分)
 // =================================================================================
 
 // 获取分享信息 (公开)
@@ -220,7 +250,7 @@ app.get('/api/public/share/:token', async (c) => {
         return c.json({ 
             isLocked: true, 
             isUnlocked: false, 
-            name: item.fileName || item.name, 
+            name: item.fileName || item.name, // 仅返回名称，不返回内容
             type 
         });
     }
@@ -558,7 +588,9 @@ app.post('/api/move', async (c) => {
     const tid = parseInt(decrypt(targetFolderId));
     if(!tid) return c.json({success:false},400);
     
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
 
     try {
         await data.moveItems(c.get('db'), c.get('storage'), (files||[]), parsedFolderIds, tid, c.get('user').id, conflictMode);
@@ -577,7 +609,10 @@ app.post('/api/folder/create', async (c) => {
 app.post('/api/delete', async (c) => {
     const { files, folders, permanent } = await c.req.json();
     const fIds = (files||[]).map(String); 
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const dIds = (folders||[]).map(id => parseInt(id, 10));
+    // **修复结束**
     
     if(permanent) await data.unifiedDelete(c.get('db'), c.get('storage'), null, null, c.get('user').id, fIds, dIds);
     else await data.softDeleteItems(c.get('db'), fIds, dIds, c.get('user').id);
@@ -588,15 +623,35 @@ app.get('/api/trash', async (c) => c.json(await data.getTrashContents(c.get('db'
 
 app.post('/api/trash/check', async (c) => {
     const { files, folders } = await c.req.json();
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
-    const conflicts = await data.checkRestoreConflicts(c.get('db'), (files||[]).map(String), parsedFolderIds, c.get('user').id);
+    // **修复结束**
+    
+    const conflicts = await data.checkRestoreConflicts(
+        c.get('db'), 
+        (files||[]).map(String), 
+        parsedFolderIds, 
+        c.get('user').id
+    );
     return c.json({ conflicts });
 });
 
 app.post('/api/trash/restore', async (c) => {
     const { files, folders, conflictMode } = await c.req.json();
+    
+    // **修复开始**：确保文件夹 ID 被正确解析为整数
     const parsedFolderIds = (folders||[]).map(id => parseInt(id, 10));
-    await data.restoreItems(c.get('db'), c.get('storage'), (files||[]).map(String), parsedFolderIds, c.get('user').id, conflictMode || 'rename');
+    // **修复结束**
+
+    await data.restoreItems(
+        c.get('db'), 
+        c.get('storage'), // 传入 storage 以支持 overwrite 时的删除
+        (files||[]).map(String), 
+        parsedFolderIds, 
+        c.get('user').id,
+        conflictMode || 'rename'
+    );
     return c.json({ success: true });
 });
 
