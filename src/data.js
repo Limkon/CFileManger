@@ -582,28 +582,31 @@ export async function setFolderPassword(db, folderId, password, userId) {
 // =================================================================================
 
 export async function moveItems(db, storage, fileIds = [], folderIds = [], targetFolderId, userId, conflictMode = 'rename') {
-    // 修正：fileIds 是字符串數組
+    // 1. 处理文件移动
     for (const fileId of fileIds) {
         const file = await db.get("SELECT fileName FROM files WHERE message_id = ? AND user_id = ?", [fileId, userId]);
         if (file) {
             let finalName = file.fileName;
+            // 检查目标位置是否有同名文件 (deleted_at IS NULL)
             const existing = await db.get(
-                // 修正: 使用 deleted_at IS NULL 替代 (is_deleted = 0 OR is_deleted IS NULL)
                 "SELECT message_id FROM files WHERE folder_id = ? AND fileName = ? AND user_id = ? AND deleted_at IS NULL", 
                 [targetFolderId, file.fileName, userId]
             );
 
             if (existing) {
                 if (conflictMode === 'overwrite') {
-                    // 移動覆蓋：將目標位置的文件軟刪除
+                    // 覆盖模式：将目标位置的旧文件软删除放入回收站
                     await db.run("UPDATE files SET is_deleted = 1, deleted_at = ? WHERE message_id = ? AND user_id = ?", [Date.now(), existing.message_id, userId]);
                 } else if (conflictMode === 'skip') {
+                    // 跳过模式：不执行移动
                     continue; 
                 } else {
+                    // 重命名模式 (默认)：获取新名称
                     finalName = await getUniqueName(db, targetFolderId, file.fileName, userId, 'file');
                 }
             }
             
+            // 执行移动更新
             await db.run(
                 "UPDATE files SET folder_id = ?, fileName = ? WHERE message_id = ? AND user_id = ?", 
                 [targetFolderId, finalName, fileId, userId]
@@ -611,14 +614,36 @@ export async function moveItems(db, storage, fileIds = [], folderIds = [], targe
         }
     }
 
+    // 2. 处理文件夹移动
     for (const folderId of folderIds) {
-        if (folderId === targetFolderId) continue; 
+        if (folderId === targetFolderId) continue; // 防止移动到自己内部
+        
         const folder = await db.get("SELECT name FROM folders WHERE id = ? AND user_id = ?", [folderId, userId]);
         if (folder) {
-            const uniqueName = await getUniqueName(db, targetFolderId, folder.name, userId, 'folder');
+            let finalName = folder.name;
+            // 检查目标位置是否存在同名文件夹
+            const existingFolder = await db.get(
+                "SELECT id FROM folders WHERE parent_id = ? AND name = ? AND user_id = ? AND deleted_at IS NULL",
+                [targetFolderId, folder.name, userId]
+            );
+
+            if (existingFolder) {
+                if (conflictMode === 'overwrite') {
+                    // 覆盖模式：将目标位置的旧文件夹（及其内容）软删除放入回收站
+                    await softDeleteItems(db, [], [existingFolder.id], userId);
+                } else if (conflictMode === 'skip') {
+                    // 跳过模式
+                    continue; 
+                } else {
+                    // 重命名模式
+                    finalName = await getUniqueName(db, targetFolderId, folder.name, userId, 'folder');
+                }
+            }
+
+            // 执行移动更新
             await db.run(
                 "UPDATE folders SET parent_id = ?, name = ? WHERE id = ? AND user_id = ?", 
-                [targetFolderId, uniqueName, folderId, userId]
+                [targetFolderId, finalName, folderId, userId]
             );
         }
     }
