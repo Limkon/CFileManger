@@ -301,7 +301,8 @@ document.addEventListener('DOMContentLoaded', () => {
         
         const id = getItemId(item);
         if (!selectedItems.has(id)) {
-            // 如果右键点击了未选中的项目，且不是在多选模式或按住Ctrl，则只选中该项目
+            // 关键修复：如果右键点击了未选中的项目，且不是在多选模式或按住Ctrl，则只选中该项目
+            // 如果右键点击了已选中的项目，则不执行此块，保留选区
             if (!isMultiSelectMode && !e.ctrlKey) {
                 selectedItems.clear();
                 document.querySelectorAll('.selected').forEach(x => x.classList.remove('selected'));
@@ -312,7 +313,6 @@ document.addEventListener('DOMContentLoaded', () => {
             const listEl = document.querySelector(`.list-row[data-id="${id}"]`);
             if(listEl) listEl.classList.add('selected');
         }
-        // 如果右键点击了已选中的项目（例如全选后右键其中一个），则保留选区，直接显示菜单
         
         updateContextMenuState(true);
         showContextMenu(e.clientX, e.clientY);
@@ -332,6 +332,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const iconClass = getIconClass(item);
         const iconColor = item.type === 'folder' ? '#fbc02d' : '#007bff';
 
+        // 关键修复：select-checkbox 始终存在，显示与否由 CSS (.grid-item.selected .select-checkbox) 控制
         div.innerHTML = `
             <div class="item-icon"><i class="${iconClass}" style="color: ${iconColor};"></i>${item.is_locked ? '<i class="fas fa-lock lock-badge"></i>' : ''}</div>
             <div class="item-info"><h5 title="${escapeHtml(item.name)}">${escapeHtml(item.name)}</h5></div>
